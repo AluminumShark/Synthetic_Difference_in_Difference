@@ -195,18 +195,14 @@ class SyntheticDiffInDiff:
                         .join(self.unit_weights)
                        .reset_index())
 
-        # 計算唯一的時間點和單位數量，用於填充缺失值
         num_unique_times = self.data[self.times_col].nunique()
         num_unique_units = self.data[self.units_col].nunique()
 
-        # 使用處理後的平均權重填充缺失值
         merged_data[self.time_weights.name] = merged_data[self.time_weights.name].fillna(1 / num_unique_times)
         merged_data[self.unit_weights.name] = merged_data[self.unit_weights.name].fillna(1 / num_unique_units)
 
-        # 計算綜合權重
         merged_data["weights"] = (merged_data[self.time_weights.name] * merged_data[self.unit_weights.name]).round(10)
 
-        # 轉換數據類型為整數
         merged_data = merged_data.astype({self.treat_col: int, self.post_col: int})
 
         self.merged_data = merged_data
