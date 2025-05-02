@@ -32,70 +32,6 @@ class SyntheticDiffInDiff:
         self.data[self.treat_col] = self.data[self.treat_col].astype(bool)
         self.data[self.post_col] = self.data[self.post_col].astype(bool)
 
-    def fit_unit_weights(self):
-        """
-        Estimate unit weights (w_i) to adjust for unit heterogeneity.
-        """
-        # Calculate the regularization parameter zeta
-        zeta = self.calculate_regularization()
-
-        # Extract pre-treatment data
-        pre_data = self.data[~self.data[self.post_col]]
-
-        # Construct the pre-treatment control group outcome matrix
-        y_pre_control = (pre_data[~pre_data[self.treat_col]]
-                        .pivot(index=self.times_col, columns=self.units_col, values=self.outcome_col))
-
-        # Calculate the average outcome for the treatment group in the pre-treatment period
-        y_pre_treat_mean = (pre_data[pre_data[self.treat_col]]
-                            .groupby(self.times_col)[self.outcome_col]
-                            .mean())
-
-        # Find common time periods
-        common_times = y_pre_control.index.intersection(y_pre_treat_mean.index)
-
-        if len(common_times) == 0:
-            raise ValueError("No common time periods between pre-treatment control and treated groups.")
-
-        # Filter data to only include common times
-        y_pre_control = y_pre_control.loc[common_times]
-        y_pre_treat_mean = y_pre_treat_mean.loc[common_times]
-
-        # Add a column of ones to the left of the matrix as the intercept term
-        T_pre = y_pre_control.shape[0]
-        X = np.concatenate([np.ones((T_pre, 1)), y_pre_control.values], axis=1)
-
-        # Define the optimization variable (unit weights, including intercept)
-        w = cp.Variable(X.shape[1])
-
-        # Define the objective function
-        objective = cp.Minimize(
-            cp.sum_squares(X @ w - y_pre_treat_mean.values) +
-            T_pre * zeta ** 2 * cp.sum_squares(w[1:])
-        )
-
-        # Define constraints
-        constraints = [
-            cp.sum(w[1:]) == 1,
-            w[1:] >= 0
-        ]
-
-        # Solve the optimization problem
-        problem = cp.Problem(objective, constraints)
-        problem.solve(verbose=False)
-
-        # Check if the problem was solved successfully
-        if w.value is None:
-            raise ValueError("Optimization for unit weights did not converge.")
-
-        # Extract unit weights (excluding intercept)
-        self.unit_weights = pd.Series(
-            w.value[1:],  # Exclude intercept
-            name="unit_weights",
-            index=y_pre_control.columns  # Units as index
-        )
-
-
     def calculate_regularization(self):
         """
         Calculate the regularization parameter zeta for the L2 penalty on unit weights.
@@ -146,6 +82,16 @@ class SyntheticDiffInDiff:
         if y_pre_treat_mean.empty:
             raise ValueError("No pre-treatment treatment group data available to fit unit weights.")
 
+        # Find common time periods
+        common_times = y_pre_control.index.intersection(y_pre_treat_mean.index)
+
+        if len(common_times) == 0:
+            raise ValueError("No common time periods between pre-treatment control and treated groups.")
+
+        # Filter data to only include common times
+        y_pre_control = y_pre_control.loc[common_times]
+        y_pre_treat_mean = y_pre_treat_mean.loc[common_times]
+
         # Add a column of ones to the left of the matrix as the intercept term
         T_pre = y_pre_control.shape[0]
         X = np.concatenate([np.ones((T_pre, 1)), y_pre_control.values], axis=1)
@@ -180,6 +126,91 @@ class SyntheticDiffInDiff:
             index=y_pre_control.columns  # Units as index
         )
 
+    def fit_time_weights(self):
+        """
+        Estimate time weights (lambda_t) to adjust for time-specific effects.
+        This method was missing in the original code.
+        """
+        # Extract post-treatment data
+        post_data = self.data[self.data[self.post_col]]
+
+        # Construct the post-treatment control group outcome matrix
+        y_post_control = (post_data[~post_data[self.treat_col]]
+                          .pivot(index=self.units_col, columns=self.times_col, values=self.outcome_col))
+
+        # Check if y_post_control is empty
+        if y_post_control.empty:
+            raise ValueError("No post-treatment control data available to fit time weights.")
+
+        # Extract pre-treatment data
+        pre_data = self.data[~self.data[self.post_col]]
+
+        # Calculate the average pre-treatment outcome for each control unit
+        y_pre_control_mean = (pre_data[~pre_data[self.treat_col]]
+                             .groupby(self.units_col)[self.outcome_col]
+                             .mean())
+
+        # Find common units between post-treatment control and pre-treatment control
+        common_units = y_post_control.index.intersection(y_pre_control_mean.index)
+
+        if len(common_units) == 0:
+            raise ValueError("No common units between post-treatment control and pre-treatment control.")
+
+        # Filter data to only include common units
+        y_post_control = y_post_control.loc[common_units]
+        y_pre_control_mean = y_pre_control_mean.loc[common_units]
+
+        # Calculate regularization parameter (for time weights)
+        # Using the same logic as for unit weights but adapted for time dimension
+        n_control_post = post_data[~post_data[self.treat_col]].shape[0]
+        first_diff_std_time = (self.data
+                              .query(f"(~{self.post_col}) & (~{self.treat_col})")
+                              .sort_values(self.units_col)
+                              .groupby(self.times_col)[self.outcome_col]
+                              .diff()
+                              .std())
+
+        # Handle cases where first_diff_std_time is NaN
+        if np.isnan(first_diff_std_time):
+            first_diff_std_time = 1.0  # Default value if calculation fails
+            print("Warning: Using default regularization for time weights.")
+
+        omega = n_control_post ** (1 / 4) * first_diff_std_time
+
+        # Add a column of ones to the matrix as the intercept term
+        N_control = y_post_control.shape[0]
+        Z = np.concatenate([np.ones((N_control, 1)), y_post_control.values], axis=1)
+
+        # Define the optimization variable (time weights, including intercept)
+        mu = cp.Variable(Z.shape[1])
+
+        # Define the objective function
+        objective = cp.Minimize(
+            cp.sum_squares(Z @ mu - y_pre_control_mean.values) +
+            N_control * omega ** 2 * cp.sum_squares(mu[1:])
+        )
+
+        # Define constraints
+        constraints = [
+            cp.sum(mu[1:]) == 1,
+            mu[1:] >= 0
+        ]
+
+        # Solve the optimization problem
+        problem = cp.Problem(objective, constraints)
+        problem.solve(verbose=False)
+
+        # Check if the problem was solved successfully
+        if mu.value is None:
+            raise ValueError("Optimization for time weights did not converge.")
+
+        # Extract time weights (excluding intercept)
+        self.time_weights = pd.Series(
+            mu.value[1:],  # Exclude intercept
+            name="time_weights",
+            index=y_post_control.columns  # Times as index
+        )
+
     def join_weights(self):
         """
         Merge unit weights and time weights into the dataset and calculate combined weights.
@@ -192,7 +223,7 @@ class SyntheticDiffInDiff:
         merged_data = (self.data
                        .set_index([self.times_col, self.units_col])
                        .join(self.time_weights)
-                        .join(self.unit_weights)
+                       .join(self.unit_weights)
                        .reset_index())
 
         num_unique_times = self.data[self.times_col].nunique()
@@ -206,8 +237,6 @@ class SyntheticDiffInDiff:
         merged_data = merged_data.astype({self.treat_col: int, self.post_col: int})
 
         self.merged_data = merged_data
-
-
 
     def synthetic_diff_in_diff_analysis(self):
         """
@@ -349,8 +378,12 @@ class SyntheticDiffInDiff:
             treat_col=treat_col,
             post_col=post_col
         )
-        effect = sdid_placebo.run_analysis()
-        return effect
+        try:
+            effect = sdid_placebo.run_analysis()
+            return effect
+        except Exception as e:
+            print(f"Placebo analysis failed with error: {e}")
+            return np.nan
 
     def make_figure(self, times, bootstrap_rounds=400, seed=0, n_jobs=1):
         """
@@ -373,13 +406,17 @@ class SyntheticDiffInDiff:
                 treat_col=self.treat_col,
                 post_col=self.post_col
             )
-            # Estimate standard error
-            sdid_instance.estimate_se(
-                bootstrap_rounds=bootstrap_rounds,
-                seed=seed,
-                n_jobs=n_jobs
-            )
-            standard_errors[time] = sdid_instance.standard_error
+            try:
+                # Estimate standard error
+                sdid_instance.estimate_se(
+                    bootstrap_rounds=bootstrap_rounds,
+                    seed=seed,
+                    n_jobs=n_jobs
+                )
+                standard_errors[time] = sdid_instance.standard_error
+            except Exception as e:
+                print(f"Standard error estimation at time {time} failed with error: {e}")
+                standard_errors[time] = np.nan
 
         # Convert standard errors to Series
         standard_errors = pd.Series(standard_errors)
@@ -396,6 +433,5 @@ class SyntheticDiffInDiff:
         ax.legend()
         plt.xticks(rotation=45)
         plt.tight_layout()
-        plt.show()
-
-        return fig
+        
+        return fig  # Return the figure instead of showing it
