@@ -10,7 +10,6 @@ import warnings
 import logging
 from scipy import stats
 
-# 設定日誌
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
