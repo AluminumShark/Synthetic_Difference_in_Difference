@@ -13,9 +13,6 @@ from scipy import stats
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-from typing import Optional, List, Union, Dict, Tuple
-import warnings
-import logging
 
 class SyntheticDiffInDiff:
     """
