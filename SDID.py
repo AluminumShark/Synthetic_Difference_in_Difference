@@ -17,11 +17,6 @@ from typing import Optional, List, Union, Dict, Tuple
 import warnings
 import logging
 
-# 設定日誌
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
 class SyntheticDiffInDiff:
     """
     Synthetic Difference-in-Differences (SDID) estimator for causal inference.
