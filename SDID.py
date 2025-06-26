@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class SyntheticDiffInDiff:
     """
-    Your friendly neighborhood SDID estimator! 🎉
+    Your friendly neighborhood SDID estimator! 
     
     Look, causal inference is hard. Traditional diff-in-diff assumes parallel trends,
     synthetic control assumes treatment timing doesn't matter. This combines both
