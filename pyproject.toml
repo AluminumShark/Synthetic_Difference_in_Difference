@@ -1,8 +1,40 @@
 [project]
-name = "synthetic-difference-in-difference"
+name = "sdid"
 version = "0.1.0"
-description = "Python implementation of Synthetic Difference-in-Differences (SDID) for causal inference"
+description = "Synthetic Difference-in-Differences (SDID) for causal inference in Python"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" }
+]
+maintainers = [
+    { name = "Your Name", email = "your.email@example.com" }
+]
+keywords = [
+    "causal-inference",
+    "difference-in-differences",
+    "synthetic-control",
+    "econometrics",
+    "panel-data",
+    "treatment-effect",
+    "sdid",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
+]
 dependencies = [
     "numpy>=1.24.0",
     "pandas>=2.0.0",
@@ -13,12 +45,34 @@ dependencies = [
     "scipy>=1.11.0",
 ]
 
-[dependency-groups]
+[project.urls]
+Homepage = "https://github.com/yourusername/sdid"
+Documentation = "https://github.com/yourusername/sdid#readme"
+Repository = "https://github.com/yourusername/sdid"
+Issues = "https://github.com/yourusername/sdid/issues"
+Changelog = "https://github.com/yourusername/sdid/releases"
+
+[project.optional-dependencies]
 dev = [
-    "pytest>=9.0.2",
-    "pytest-cov>=7.0.0",
     "ruff>=0.8.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sdid"]
 
 [tool.ruff]
 line-length = 100
@@ -51,3 +105,21 @@ known-first-party = ["sdid"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["src/sdid"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
