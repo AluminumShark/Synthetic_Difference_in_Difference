@@ -6,23 +6,22 @@
 
 A Python implementation of Synthetic Difference-in-Differences for causal inference.
 
-Python 實現的合成雙重差分法 (SDID)，用於因果推論。
+[繁體中文版](README_zh-TW.md)
 
 ---
 
-## Overview | 概述
+## Overview
 
 **SDID** combines synthetic control methods with difference-in-differences to provide robust causal effect estimates. It automatically finds optimal weights for:
 
-- **Control units**: Creates a synthetic comparison group
+- **Control units**: Creates a synthetic comparison group that matches treated units' pre-treatment trends
 - **Time periods**: Balances pre/post treatment comparisons
 
-**SDID** 結合了合成控制法與雙重差分法的優點，提供穩健的因果效應估計。它自動計算最佳權重：
+### Reference
 
-- **控制單位權重**：建立合成對照組
-- **時間期間權重**：平衡處理前後的比較
+This implementation is based on:
 
-### Reference | 參考文獻
+> Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021). Synthetic difference-in-differences. *American Economic Review*, 111(12), 4088-4118.
 
 ```bibtex
 @article{arkhangelsky2021synthetic,
@@ -38,7 +37,7 @@ Python 實現的合成雙重差分法 (SDID)，用於因果推論。
 
 ---
 
-## Installation | 安裝
+## Installation
 
 ### Using uv (Recommended)
 
@@ -56,139 +55,163 @@ pip install numpy pandas cvxpy statsmodels joblib matplotlib scipy
 
 ---
 
-## Quick Start | 快速開始
+## Quick Start
 
 ```python
 import pandas as pd
 from SDID import SyntheticDiffInDiff
 
-# Load your panel data | 載入面板資料
+# Load your panel data
 data = pd.read_csv("your_data.csv")
 
-# Initialize and fit | 初始化並擬合
+# Initialize the estimator
 sdid = SyntheticDiffInDiff(
     data=data,
-    outcome_col="outcome",    # Outcome variable | 結果變數
-    times_col="year",         # Time period | 時間
-    units_col="state",        # Unit identifier | 單位識別
-    treat_col="treated",      # Treatment indicator | 處理指標
-    post_col="post"           # Post-treatment indicator | 處理後指標
+    outcome_col="outcome",    # Outcome variable
+    times_col="year",         # Time period identifier
+    units_col="state",        # Unit identifier
+    treat_col="treated",      # Treatment indicator (0/1)
+    post_col="post"           # Post-treatment indicator (0/1)
 )
 
-# Estimate treatment effect | 估計處理效果
+# Fit the model
 effect = sdid.fit()
 print(f"Treatment Effect: {effect:.4f}")
 
-# Estimate standard error | 估計標準誤
+# Estimate standard error (with parallel processing)
 sdid.estimate_se(n_bootstrap=200, n_jobs=4)
+
+# Print full summary
 print(sdid.summary())
 ```
 
 ---
 
-## Data Format | 資料格式
+## Data Format
 
 Your data should be in **long format** (one row per unit-time observation):
 
-資料須為**長格式**（每個單位-時間組合一列）：
-
 | Column | Description | Example |
 |--------|-------------|---------|
-| `outcome` | Outcome variable | Sales, GDP |
+| `outcome` | Outcome variable | Sales, GDP, Test scores |
 | `times` | Time period | 2018, 2019, 2020 |
 | `units` | Unit identifier | "CA", "TX", "NY" |
 | `treat` | Treatment indicator | 0 = control, 1 = treated |
-| `post` | Post-treatment period | 0 = before, 1 = after |
+| `post` | Post-treatment indicator | 0 = before, 1 = after |
 
-**Example data:**
+**Example:**
 
 ```
 unit  year  outcome  treated  post
-CA    2018  100.5    0        0
+CA    2018  100.5    0        0     # California, pre-treatment, control
 CA    2019  102.3    0        0
-CA    2020  105.1    0        1
-TX    2018  98.2     1        0
+CA    2020  105.1    0        1     # Post-treatment period
+TX    2018  98.2     1        0     # Texas, treated unit
 TX    2019  99.8     1        0
-TX    2020  108.7    1        1
+TX    2020  108.7    1        1     # Treated, post-treatment
 ```
 
 ---
 
-## API Reference | API 參考
+## API Reference
 
-### Core Methods | 核心方法
+### Core Methods
 
 | Method | Description |
 |--------|-------------|
-| `fit(verbose=False)` | Fit model and return treatment effect |
-| `estimate_se(n_bootstrap=400, seed=0, n_jobs=1)` | Estimate standard error |
-| `summary()` | Return formatted results summary |
-| `get_weights_summary()` | Return unit and time weights |
+| `fit(verbose=False)` | Fit the model and return the treatment effect |
+| `estimate_se(n_bootstrap=400, seed=0, n_jobs=1)` | Estimate standard error via placebo bootstrap |
+| `summary()` | Return a formatted summary of results |
+| `get_weights_summary()` | Return DataFrames of unit and time weights |
+
+### Event Study Methods
+
+| Method | Description |
+|--------|-------------|
+| `run_event_study(times)` | Estimate effects for multiple time periods |
+| `plot_event_study(times, n_bootstrap=400, ...)` | Create event study plot with confidence intervals |
+
+### Properties
+
+| Property | Description |
+|----------|-------------|
+| `treatment_effect` | Estimated ATT (after calling `fit()`) |
+| `standard_error` | Estimated SE (after calling `estimate_se()`) |
+| `unit_weights` | Weights assigned to control units |
+| `time_weights` | Weights assigned to time periods |
+| `is_fitted` | Boolean indicating if model has been fitted |
+
+---
+
+## Examples
+
+### Basic Usage
 
 ```python
+# Fit and get results
 effect = sdid.fit()
-sdid.estimate_se(n_bootstrap=400, n_jobs=-1)
+sdid.estimate_se(n_bootstrap=400, n_jobs=-1)  # Use all CPU cores
 print(sdid.summary())
 ```
 
-### Event Study | 事件研究
-
-| Method | Description |
-|--------|-------------|
-| `run_event_study(times)` | Estimate effects for multiple periods |
-| `plot_event_study(times, ...)` | Create event study plot with CI |
+### Event Study
 
 ```python
-effects = sdid.run_event_study([2020, 2021, 2022])
-fig = sdid.plot_event_study(times=[2020, 2021, 2022], n_bootstrap=200, n_jobs=4)
-fig.savefig("event_study.png", dpi=300)
+# Analyze treatment effects over time
+post_periods = [2020, 2021, 2022]
+effects = sdid.run_event_study(post_periods)
+
+# Create publication-ready plot
+fig = sdid.plot_event_study(
+    times=post_periods,
+    n_bootstrap=200,
+    confidence_level=0.95,
+    n_jobs=4
+)
+fig.savefig("event_study.png", dpi=300, bbox_inches="tight")
+```
+
+### Inspect Weights
+
+```python
+weights = sdid.get_weights_summary()
+
+print("Top control units by weight:")
+print(weights["unit_weights"].head(10))
+
+print("\nTime period weights:")
+print(weights["time_weights"])
 ```
 
 ---
 
-## Features | 功能特色
+## Key Assumptions
 
-| Feature | Description |
-|---------|-------------|
-| **Automatic weight optimization** | Solves convex optimization for unit/time weights |
-| **Bootstrap inference** | Placebo-based standard error estimation |
-| **Event study analysis** | Dynamic treatment effect estimation |
-| **Parallel processing** | Multi-core support via joblib |
-| **Publication-ready plots** | Matplotlib-based visualization |
+SDID relies on several key assumptions:
+
+1. **No anticipation**: Units do not change behavior in anticipation of treatment
+2. **SUTVA**: No spillover effects between treated and control units
+3. **Overlap**: Control units can reasonably approximate treated units
+
+Always consider whether these assumptions hold in your specific context.
 
 ---
 
-## Development | 開發
+## Development
 
 ```bash
-# Install dev dependencies | 安裝開發相依套件
+# Install with dev dependencies
 uv sync --dev
 
-# Run linter | 執行 linter
+# Run linter
 uv run ruff check SDID.py
 
-# Format code | 格式化程式碼
+# Format code
 uv run ruff format SDID.py
 ```
 
 ---
 
-## Assumptions | 假設條件
-
-SDID relies on these key assumptions:
-
-1. **No anticipation**: Units don't change behavior before treatment
-2. **SUTVA**: No spillover effects between units
-3. **Overlap**: Control units can approximate treated units
-
-SDID 依賴以下關鍵假設：
-
-1. **無預期效應**：單位不會在處理前改變行為
-2. **SUTVA**：單位間無外溢效應
-3. **重疊性**：控制單位能近似處理單位
-
----
-
-## License | 授權
+## License
 
 MIT License - see [LICENSE](LICENSE) for details.
