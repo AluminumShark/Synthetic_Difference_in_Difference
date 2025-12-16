@@ -4,24 +4,126 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-A Python implementation of Synthetic Difference-in-Differences for causal inference.
-
-[繁體中文版](README_zh-TW.md)
+[English](#english) | [繁體中文](#繁體中文)
 
 ---
 
-## Overview
+## English
+
+A Python implementation of Synthetic Difference-in-Differences for causal inference.
+
+### Overview
 
 **SDID** combines synthetic control methods with difference-in-differences to provide robust causal effect estimates. It automatically finds optimal weights for:
 
-- **Control units**: Creates a synthetic comparison group that matches treated units' pre-treatment trends
+- **Control units**: Creates a synthetic comparison group
 - **Time periods**: Balances pre/post treatment comparisons
 
+### Installation
+
+**Using uv (Recommended)**
+
+```bash
+git clone https://github.com/yourusername/Synthetic_Difference_in_Difference.git
+cd Synthetic_Difference_in_Difference
+uv sync
+```
+
+**Using pip**
+
+```bash
+pip install numpy pandas cvxpy statsmodels joblib matplotlib scipy
+```
+
+### Quick Start
+
+```python
+import pandas as pd
+from SDID import SyntheticDiffInDiff
+
+# Load your panel data
+data = pd.read_csv("your_data.csv")
+
+# Initialize and fit
+sdid = SyntheticDiffInDiff(
+    data=data,
+    outcome_col="outcome",
+    times_col="year",
+    units_col="state",
+    treat_col="treated",
+    post_col="post"
+)
+
+# Estimate treatment effect
+effect = sdid.fit()
+print(f"Treatment Effect: {effect:.4f}")
+
+# Estimate standard error
+sdid.estimate_se(n_bootstrap=200, n_jobs=4)
+print(sdid.summary())
+```
+
+### Data Format
+
+Your data should be in **long format** (one row per unit-time observation):
+
+| Column | Description | Example |
+|--------|-------------|---------|
+| `outcome` | Outcome variable | Sales, GDP |
+| `times` | Time period | 2018, 2019, 2020 |
+| `units` | Unit identifier | "CA", "TX", "NY" |
+| `treat` | Treatment indicator | 0 = control, 1 = treated |
+| `post` | Post-treatment period | 0 = before, 1 = after |
+
+**Example:**
+
+```
+unit  year  outcome  treated  post
+CA    2018  100.5    0        0
+CA    2019  102.3    0        0
+CA    2020  105.1    0        1
+TX    2018  98.2     1        0
+TX    2019  99.8     1        0
+TX    2020  108.7    1        1
+```
+
+### API Reference
+
+| Method | Description |
+|--------|-------------|
+| `fit(verbose=False)` | Fit model and return treatment effect |
+| `estimate_se(n_bootstrap, seed, n_jobs)` | Estimate standard error via placebo bootstrap |
+| `summary()` | Return formatted results summary |
+| `run_event_study(times)` | Estimate effects for multiple periods |
+| `plot_event_study(times, ...)` | Create event study plot with confidence intervals |
+| `get_weights_summary()` | Return unit and time weights |
+| `is_fitted` | Property to check if model is fitted |
+
+### Event Study
+
+```python
+# Estimate dynamic treatment effects
+effects = sdid.run_event_study([2020, 2021, 2022])
+
+# Plot with confidence intervals
+fig = sdid.plot_event_study(
+    times=[2020, 2021, 2022],
+    n_bootstrap=200,
+    confidence_level=0.95,
+    n_jobs=4
+)
+fig.savefig("event_study.png", dpi=300)
+```
+
+### Assumptions
+
+SDID relies on these key assumptions:
+
+1. **No anticipation**: Units don't change behavior before treatment
+2. **SUTVA**: No spillover effects between units
+3. **Overlap**: Control units can approximate treated units
+
 ### Reference
-
-This implementation is based on:
-
-> Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021). Synthetic difference-in-differences. *American Economic Review*, 111(12), 4088-4118.
 
 ```bibtex
 @article{arkhangelsky2021synthetic,
@@ -35,11 +137,34 @@ This implementation is based on:
 }
 ```
 
+### Development
+
+```bash
+uv sync --dev          # Install dev dependencies
+uv run ruff check .    # Run linter
+uv run ruff format .   # Format code
+```
+
+### License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
 ---
 
-## Installation
+## 繁體中文
 
-### Using uv (Recommended)
+合成雙重差分法 (SDID) 的 Python 實現，用於因果推論。
+
+### 概述
+
+**SDID** 結合了合成控制法與雙重差分法的優點，提供穩健的因果效應估計。它自動計算最佳權重：
+
+- **控制單位權重**：建立合成對照組
+- **時間期間權重**：平衡處理前後的比較
+
+### 安裝
+
+**使用 uv（推薦）**
 
 ```bash
 git clone https://github.com/yourusername/Synthetic_Difference_in_Difference.git
@@ -47,171 +172,122 @@ cd Synthetic_Difference_in_Difference
 uv sync
 ```
 
-### Using pip
+**使用 pip**
 
 ```bash
 pip install numpy pandas cvxpy statsmodels joblib matplotlib scipy
 ```
 
----
-
-## Quick Start
+### 快速開始
 
 ```python
 import pandas as pd
 from SDID import SyntheticDiffInDiff
 
-# Load your panel data
+# 載入面板資料
 data = pd.read_csv("your_data.csv")
 
-# Initialize the estimator
+# 初始化並擬合
 sdid = SyntheticDiffInDiff(
     data=data,
-    outcome_col="outcome",    # Outcome variable
-    times_col="year",         # Time period identifier
-    units_col="state",        # Unit identifier
-    treat_col="treated",      # Treatment indicator (0/1)
-    post_col="post"           # Post-treatment indicator (0/1)
+    outcome_col="outcome",    # 結果變數
+    times_col="year",         # 時間
+    units_col="state",        # 單位識別
+    treat_col="treated",      # 處理指標
+    post_col="post"           # 處理後指標
 )
 
-# Fit the model
+# 估計處理效果
 effect = sdid.fit()
-print(f"Treatment Effect: {effect:.4f}")
+print(f"處理效果: {effect:.4f}")
 
-# Estimate standard error (with parallel processing)
+# 估計標準誤
 sdid.estimate_se(n_bootstrap=200, n_jobs=4)
-
-# Print full summary
 print(sdid.summary())
 ```
 
----
+### 資料格式
 
-## Data Format
+資料須為**長格式**（每個單位-時間組合一列）：
 
-Your data should be in **long format** (one row per unit-time observation):
+| 欄位 | 說明 | 範例 |
+|------|------|------|
+| `outcome` | 結果變數 | 銷售額、GDP |
+| `times` | 時間期間 | 2018, 2019, 2020 |
+| `units` | 單位識別 | "CA", "TX", "NY" |
+| `treat` | 處理指標 | 0 = 控制組, 1 = 處理組 |
+| `post` | 處理後期間 | 0 = 處理前, 1 = 處理後 |
 
-| Column | Description | Example |
-|--------|-------------|---------|
-| `outcome` | Outcome variable | Sales, GDP, Test scores |
-| `times` | Time period | 2018, 2019, 2020 |
-| `units` | Unit identifier | "CA", "TX", "NY" |
-| `treat` | Treatment indicator | 0 = control, 1 = treated |
-| `post` | Post-treatment indicator | 0 = before, 1 = after |
-
-**Example:**
+**範例：**
 
 ```
 unit  year  outcome  treated  post
-CA    2018  100.5    0        0     # California, pre-treatment, control
+CA    2018  100.5    0        0
 CA    2019  102.3    0        0
-CA    2020  105.1    0        1     # Post-treatment period
-TX    2018  98.2     1        0     # Texas, treated unit
+CA    2020  105.1    0        1
+TX    2018  98.2     1        0
 TX    2019  99.8     1        0
-TX    2020  108.7    1        1     # Treated, post-treatment
+TX    2020  108.7    1        1
 ```
 
----
+### API 參考
 
-## API Reference
+| 方法 | 說明 |
+|------|------|
+| `fit(verbose=False)` | 擬合模型並回傳處理效果 |
+| `estimate_se(n_bootstrap, seed, n_jobs)` | 透過安慰劑 bootstrap 估計標準誤 |
+| `summary()` | 回傳格式化的結果摘要 |
+| `run_event_study(times)` | 估計多個時間點的效果 |
+| `plot_event_study(times, ...)` | 繪製帶信賴區間的事件研究圖 |
+| `get_weights_summary()` | 回傳單位和時間權重 |
+| `is_fitted` | 檢查模型是否已擬合的屬性 |
 
-### Core Methods
-
-| Method | Description |
-|--------|-------------|
-| `fit(verbose=False)` | Fit the model and return the treatment effect |
-| `estimate_se(n_bootstrap=400, seed=0, n_jobs=1)` | Estimate standard error via placebo bootstrap |
-| `summary()` | Return a formatted summary of results |
-| `get_weights_summary()` | Return DataFrames of unit and time weights |
-
-### Event Study Methods
-
-| Method | Description |
-|--------|-------------|
-| `run_event_study(times)` | Estimate effects for multiple time periods |
-| `plot_event_study(times, n_bootstrap=400, ...)` | Create event study plot with confidence intervals |
-
-### Properties
-
-| Property | Description |
-|----------|-------------|
-| `treatment_effect` | Estimated ATT (after calling `fit()`) |
-| `standard_error` | Estimated SE (after calling `estimate_se()`) |
-| `unit_weights` | Weights assigned to control units |
-| `time_weights` | Weights assigned to time periods |
-| `is_fitted` | Boolean indicating if model has been fitted |
-
----
-
-## Examples
-
-### Basic Usage
+### 事件研究
 
 ```python
-# Fit and get results
-effect = sdid.fit()
-sdid.estimate_se(n_bootstrap=400, n_jobs=-1)  # Use all CPU cores
-print(sdid.summary())
-```
+# 估計動態處理效果
+effects = sdid.run_event_study([2020, 2021, 2022])
 
-### Event Study
-
-```python
-# Analyze treatment effects over time
-post_periods = [2020, 2021, 2022]
-effects = sdid.run_event_study(post_periods)
-
-# Create publication-ready plot
+# 繪製帶信賴區間的圖表
 fig = sdid.plot_event_study(
-    times=post_periods,
+    times=[2020, 2021, 2022],
     n_bootstrap=200,
     confidence_level=0.95,
     n_jobs=4
 )
-fig.savefig("event_study.png", dpi=300, bbox_inches="tight")
+fig.savefig("event_study.png", dpi=300)
 ```
 
-### Inspect Weights
+### 假設條件
 
-```python
-weights = sdid.get_weights_summary()
+SDID 依賴以下關鍵假設：
 
-print("Top control units by weight:")
-print(weights["unit_weights"].head(10))
+1. **無預期效應**：單位不會在處理前改變行為
+2. **SUTVA**：單位間無外溢效應
+3. **重疊性**：控制單位能近似處理單位
 
-print("\nTime period weights:")
-print(weights["time_weights"])
+### 參考文獻
+
+```bibtex
+@article{arkhangelsky2021synthetic,
+  title={Synthetic difference-in-differences},
+  author={Arkhangelsky, Dmitry and Athey, Susan and Hirshberg, David A and Imbens, Guido W and Wager, Stefan},
+  journal={American Economic Review},
+  volume={111},
+  number={12},
+  pages={4088--4118},
+  year={2021}
+}
 ```
 
----
-
-## Key Assumptions
-
-SDID relies on several key assumptions:
-
-1. **No anticipation**: Units do not change behavior in anticipation of treatment
-2. **SUTVA**: No spillover effects between treated and control units
-3. **Overlap**: Control units can reasonably approximate treated units
-
-Always consider whether these assumptions hold in your specific context.
-
----
-
-## Development
+### 開發
 
 ```bash
-# Install with dev dependencies
-uv sync --dev
-
-# Run linter
-uv run ruff check SDID.py
-
-# Format code
-uv run ruff format SDID.py
+uv sync --dev          # 安裝開發相依套件
+uv run ruff check .    # 執行 linter
+uv run ruff format .   # 格式化程式碼
 ```
 
----
+### 授權
 
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
+MIT 授權 - 詳見 [LICENSE](LICENSE)。
