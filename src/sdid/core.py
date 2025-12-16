@@ -105,6 +105,8 @@ class SyntheticDiffInDiff:
         self.merged_data: pd.DataFrame | None = None
         self.treatment_effect: float | None = None
         self.standard_error: float | None = None
+        self._unit_intercept: float | None = None  # Intercept from unit weight optimization
+        self._time_intercept: float | None = None  # Intercept from time weight optimization
 
         # Ensure boolean types for indicators
         self.data[self.treat_col] = self.data[self.treat_col].astype(bool)
@@ -253,8 +255,9 @@ class SyntheticDiffInDiff:
         Estimate optimal weights for control units.
 
         Solves a quadratic programming problem to find weights that make
-        the weighted average of control units match treated units in
-        pre-treatment periods.
+        the weighted average of control units match treated unit TRENDS in
+        pre-treatment periods. Includes an intercept term to allow for
+        level differences (SDID matches trends, not absolute levels).
         """
         logger.info("Estimating unit weights...")
 
@@ -288,15 +291,20 @@ class SyntheticDiffInDiff:
         control_matrix = control_matrix.loc[common_times]
         treated_avg = treated_avg.loc[common_times]
 
-        # Set up optimization problem
+        # Set up optimization problem with intercept
+        # The intercept allows for level differences between treated and controls
+        # (SDID learns trends, not absolute levels)
         n_units = control_matrix.shape[1]
         weights = cp.Variable(n_units, nonneg=True)
+        intercept = cp.Variable(1)  # Can be positive or negative
 
         Y = control_matrix.values
         y = treated_avg.values
 
+        # Objective: minimize squared error with intercept + regularization on weights
         objective = cp.Minimize(
-            cp.sum_squares(Y @ weights - y) + regularization * cp.sum_squares(weights)
+            cp.sum_squares(Y @ weights + intercept - y)
+            + regularization * cp.sum_squares(weights)
         )
 
         problem = cp.Problem(objective)
@@ -309,10 +317,12 @@ class SyntheticDiffInDiff:
 
             weight_series = pd.Series(weights.value, index=control_matrix.columns, name="weight")
             self.unit_weights = weight_series[weight_series > self.WEIGHT_THRESHOLD]
+            self._unit_intercept = float(intercept.value[0])
 
             logger.info(
                 f"Unit weights estimated: {len(self.unit_weights)} units with non-zero weights"
             )
+            logger.info(f"Unit intercept: {self._unit_intercept:.4f}")
 
         except Exception as e:
             raise ValueError(f"Unit weight optimization failed: {e!s}") from e
@@ -323,6 +333,7 @@ class SyntheticDiffInDiff:
 
         Solves an optimization problem to find time weights that balance
         pre-treatment comparisons between treated and control groups.
+        Includes an intercept term to account for level differences.
         """
         logger.info("Estimating time weights...")
 
@@ -349,17 +360,21 @@ class SyntheticDiffInDiff:
         treated_matrix = treated_matrix[common_times]
         control_matrix = control_matrix[common_times]
 
-        # Time averages
+        # Time averages (difference between treated and control at each time)
         treated_avg = treated_matrix.mean(axis=0).values
         control_avg = control_matrix.mean(axis=0).values
 
-        # Optimization
+        # Optimization with intercept
+        # Goal: find weights λ such that weighted pre-period difference predicts post-period
         n_periods = len(common_times)
         weights = cp.Variable(n_periods, nonneg=True)
+        intercept = cp.Variable(1)  # Intercept for level adjustment
 
         diff = treated_avg - control_avg
+        # Minimize: (λ'·diff + intercept)² + regularization·||λ||²
         objective = cp.Minimize(
-            cp.sum_squares(weights.T @ diff) + regularization * cp.sum_squares(weights)
+            cp.sum_squares(weights.T @ diff + intercept)
+            + regularization * cp.sum_squares(weights)
         )
 
         problem = cp.Problem(objective)
@@ -372,10 +387,12 @@ class SyntheticDiffInDiff:
 
             weight_series = pd.Series(weights.value, index=common_times, name="time_weight")
             self.time_weights = weight_series[weight_series > self.WEIGHT_THRESHOLD]
+            self._time_intercept = float(intercept.value[0])
 
             logger.info(
                 f"Time weights estimated: {len(self.time_weights)} periods with non-zero weights"
             )
+            logger.info(f"Time intercept: {self._time_intercept:.4f}")
 
         except Exception as e:
             raise ValueError(f"Time weight optimization failed: {e!s}") from e
@@ -415,24 +432,35 @@ class SyntheticDiffInDiff:
         logger.info("Weights merged successfully")
 
     def _run_weighted_regression(self, verbose: bool = False) -> None:
-        """Run weighted difference-in-differences regression."""
+        """
+        Run weighted two-way fixed effects regression.
+
+        Uses unit and time fixed effects as required by SDID methodology.
+        The treatment effect is identified from the treat_post interaction term.
+        """
         logger.info("Running weighted regression...")
 
         if self.merged_data is None:
             raise ValueError("Data must be merged before running regression.")
 
-        df = self.merged_data.copy()
+        # Work directly on merged_data to avoid memory overhead
+        # Create interaction term in-place
+        self.merged_data["treat_post"] = (
+            self.merged_data[self.treat_col] & self.merged_data[self.post_col]
+        )
 
-        # Create interaction term
-        df["treat_post"] = df[self.treat_col] & df[self.post_col]
-
-        # Filter to observations with positive weights
-        df = df[df["combined_weight"] > 0]
+        # Filter to observations with positive weights (view, not copy)
+        df = self.merged_data[self.merged_data["combined_weight"] > 0]
 
         if df.empty:
             raise ValueError("No observations with positive weights.")
 
-        formula = f"{self.outcome_col} ~ {self.treat_col} + {self.post_col} + treat_post"
+        # Two-way fixed effects regression (unit + time FE)
+        # C() indicates categorical/factor variables for fixed effects
+        formula = (
+            f"{self.outcome_col} ~ treat_post + "
+            f"C({self.units_col}) + C({self.times_col})"
+        )
 
         try:
             model = smf.wls(formula, data=df, weights=df["combined_weight"])
@@ -442,7 +470,7 @@ class SyntheticDiffInDiff:
 
             if verbose:
                 print("\n" + "=" * 60)
-                print("SDID REGRESSION RESULTS")
+                print("SDID REGRESSION RESULTS (Two-Way Fixed Effects)")
                 print("=" * 60)
                 print(results.summary())
                 print("=" * 60)
@@ -568,13 +596,13 @@ class SyntheticDiffInDiff:
         effects = {}
 
         for t in times:
-            # Filter: pre-treatment periods + current period
+            # Filter: pre-treatment periods + current period (view first, copy only when needed)
             mask = (~self.data[self.post_col]) | (self.data[self.times_col] == t)
-            filtered = self.data[mask].copy()
+            filtered = self.data.loc[mask]
 
-            # Check data availability
-            n_treated = filtered[filtered[self.treat_col]].shape[0]
-            n_control = filtered[~filtered[self.treat_col]].shape[0]
+            # Check data availability (no copy needed for counting)
+            n_treated = (filtered[self.treat_col]).sum()
+            n_control = (~filtered[self.treat_col]).sum()
 
             if n_treated == 0 or n_control == 0:
                 logger.warning(f"Time {t}: Insufficient data, skipping.")
@@ -582,6 +610,7 @@ class SyntheticDiffInDiff:
                 continue
 
             try:
+                # Copy only happens inside SyntheticDiffInDiff.__init__
                 sdid = SyntheticDiffInDiff(
                     data=filtered,
                     outcome_col=self.outcome_col,
@@ -633,7 +662,7 @@ class SyntheticDiffInDiff:
         se_dict = {}
         for t in times:
             mask = (~self.data[self.post_col]) | (self.data[self.times_col] == t)
-            filtered = self.data[mask].copy()
+            filtered = self.data.loc[mask]  # View, copy happens in __init__
 
             try:
                 sdid = SyntheticDiffInDiff(
@@ -680,6 +709,17 @@ class SyntheticDiffInDiff:
         )
 
         ax.axhline(0, color="gray", linestyle="--", alpha=0.7)
+
+        # Add intervention start line (first post-treatment period)
+        intervention_time = self.data[self.data[self.post_col]][self.times_col].min()
+        ax.axvline(
+            x=intervention_time,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            alpha=0.8,
+            label="Intervention Start",
+        )
 
         ax.set_xlabel("Time", fontsize=12)
         ax.set_ylabel("Treatment Effect", fontsize=12)
