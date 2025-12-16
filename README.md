@@ -1,5 +1,6 @@
 # Synthetic Difference-in-Differences (SDID)
 
+[![PyPI version](https://img.shields.io/pypi/v/sdid.svg)](https://pypi.org/project/sdid/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -21,25 +22,33 @@ A Python implementation of Synthetic Difference-in-Differences for causal infere
 
 ### Installation
 
-**Using uv (Recommended)**
+**From PyPI (Recommended)**
 
 ```bash
-git clone https://github.com/yourusername/Synthetic_Difference_in_Difference.git
-cd Synthetic_Difference_in_Difference
-uv sync
+pip install sdid
 ```
 
-**Using pip**
+**From Source**
 
 ```bash
-pip install numpy pandas cvxpy statsmodels joblib matplotlib scipy
+git clone https://github.com/yourusername/sdid.git
+cd sdid
+pip install .
+```
+
+**Development Installation**
+
+```bash
+git clone https://github.com/yourusername/sdid.git
+cd sdid
+uv sync --extra dev
 ```
 
 ### Quick Start
 
 ```python
 import pandas as pd
-from SDID import SyntheticDiffInDiff
+from sdid import SyntheticDiffInDiff
 
 # Load your panel data
 data = pd.read_csv("your_data.csv")
@@ -140,9 +149,23 @@ SDID relies on these key assumptions:
 ### Development
 
 ```bash
-uv sync --dev          # Install dev dependencies
-uv run ruff check .    # Run linter
-uv run ruff format .   # Format code
+# Install dev dependencies
+uv sync --extra dev
+
+# Run tests
+uv run pytest tests/ -v
+
+# Run linter
+uv run ruff check .
+
+# Format code
+uv run ruff format .
+
+# Build package
+uv build
+
+# Upload to PyPI (requires API token)
+uv publish
 ```
 
 ### License
@@ -164,25 +187,33 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ### 安裝
 
-**使用 uv（推薦）**
+**從 PyPI 安裝（推薦）**
 
 ```bash
-git clone https://github.com/yourusername/Synthetic_Difference_in_Difference.git
-cd Synthetic_Difference_in_Difference
-uv sync
+pip install sdid
 ```
 
-**使用 pip**
+**從原始碼安裝**
 
 ```bash
-pip install numpy pandas cvxpy statsmodels joblib matplotlib scipy
+git clone https://github.com/yourusername/sdid.git
+cd sdid
+pip install .
+```
+
+**開發安裝**
+
+```bash
+git clone https://github.com/yourusername/sdid.git
+cd sdid
+uv sync --extra dev
 ```
 
 ### 快速開始
 
 ```python
 import pandas as pd
-from SDID import SyntheticDiffInDiff
+from sdid import SyntheticDiffInDiff
 
 # 載入面板資料
 data = pd.read_csv("your_data.csv")
@@ -283,9 +314,23 @@ SDID 依賴以下關鍵假設：
 ### 開發
 
 ```bash
-uv sync --dev          # 安裝開發相依套件
-uv run ruff check .    # 執行 linter
-uv run ruff format .   # 格式化程式碼
+# 安裝開發相依套件
+uv sync --extra dev
+
+# 執行測試
+uv run pytest tests/ -v
+
+# 執行 linter
+uv run ruff check .
+
+# 格式化程式碼
+uv run ruff format .
+
+# 建置套件
+uv build
+
+# 上傳到 PyPI（需要 API token）
+uv publish
 ```
 
 ### 授權

@@ -20,6 +20,10 @@ wheels/
 .installed.cfg
 *.egg
 
+# Build artifacts
+*.whl
+*.tar.gz
+
 # Virtual environments
 .venv/
 venv/
