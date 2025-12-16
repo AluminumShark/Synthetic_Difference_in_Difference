@@ -1,771 +1,763 @@
+"""
+Synthetic Difference-in-Differences (SDID) Implementation.
+
+This module provides a Python implementation of the SDID estimator
+based on Arkhangelsky et al. (2021).
+
+Reference:
+    Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W., & Wager, S. (2021).
+    Synthetic difference-in-differences. American Economic Review, 111(12), 4088-4118.
+"""
+
+import logging
+import warnings
+from functools import partial
+
+import cvxpy as cp
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import cvxpy as cp
 import statsmodels.formula.api as smf
-from functools import partial
 from joblib import Parallel, delayed
-import matplotlib.pyplot as plt
-from typing import Optional, List, Union, Dict, Tuple, Any
-import warnings
-import logging
 from scipy import stats
 
-# Set up logging - because debugging is half the battle
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class SyntheticDiffInDiff:
     """
-    Your friendly neighborhood SDID estimator! 
-    
-    Look, causal inference is hard. Traditional diff-in-diff assumes parallel trends,
-    synthetic control assumes treatment timing doesn't matter. This combines both
-    approaches to give you something more robust. It's like having your cake and eating it too!
-    
-    The math is from Arkhangelsky et al. (2021) - those folks are way smarter than me.
-    This implementation tries to make their brilliant ideas actually usable for us mortals.
-    
-    What this does:
-    - Finds the best weights for control units (so they look like treated units pre-treatment)
-    - Finds the best weights for time periods (to balance pre/post comparisons)
-    - Combines everything into a weighted diff-in-diff that's hopefully less biased
-    
-    What you need:
-    - Panel data in long format (one row per unit-time combo)
-    - Clear treatment and control groups
-    - Pre and post treatment periods
-    - Some faith that your control units provide a decent counterfactual
+    Synthetic Difference-in-Differences (SDID) Estimator.
+
+    SDID combines the strengths of synthetic control methods and traditional
+    difference-in-differences to provide more robust causal effect estimates.
+    It works by:
+
+    1. Finding optimal weights for control units to match pre-treatment trends
+    2. Finding optimal weights for time periods to balance comparisons
+    3. Running a weighted diff-in-diff regression
+
+    Requirements:
+        - Panel data in long format (one row per unit-time observation)
+        - Binary treatment indicator (treated vs control units)
+        - Binary post-treatment indicator (pre vs post periods)
+
+    Example:
+        >>> sdid = SyntheticDiffInDiff(
+        ...     data=df,
+        ...     outcome_col="outcome",
+        ...     times_col="year",
+        ...     units_col="state",
+        ...     treat_col="treated",
+        ...     post_col="post"
+        ... )
+        >>> effect = sdid.fit()
+        >>> print(f"Treatment effect: {effect:.4f}")
+
+    Attributes:
+        treatment_effect: Estimated average treatment effect (after fitting)
+        standard_error: Estimated standard error (after calling estimate_se)
+        unit_weights: Weights assigned to control units
+        time_weights: Weights assigned to time periods
     """
-    
-    def __init__(self, 
-                 data: pd.DataFrame, 
-                 outcome_col: str, 
-                 times_col: str, 
-                 units_col: str, 
-                 treat_col: str, 
-                 post_col: str):
+
+    # Class constants
+    WEIGHT_THRESHOLD = 1e-6  # Minimum weight to keep
+    DEFAULT_NOISE_LEVEL = 0.01  # Fallback when noise can't be estimated
+
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        outcome_col: str,
+        times_col: str,
+        units_col: str,
+        treat_col: str,
+        post_col: str,
+    ):
         """
-        Set up the SDID analysis - just tell me which column is which!
-        
+        Initialize the SDID estimator.
+
         Args:
-            data: Your precious panel data
-            outcome_col: The thing you actually care about measuring
-            times_col: When stuff happened (quarters, years, whatever)
-            units_col: Who you're studying (states, firms, individuals)
-            treat_col: Who got the treatment (True/1 for treated folks)
-            post_col: When treatment kicked in (True/1 for post-treatment periods)
-            
-        I'll do some basic sanity checks because nobody likes cryptic error messages
+            data: Panel data in long format
+            outcome_col: Name of the outcome variable column
+            times_col: Name of the time period column
+            units_col: Name of the unit identifier column
+            treat_col: Name of the treatment indicator column (1/True = treated)
+            post_col: Name of the post-treatment indicator column (1/True = post)
+
+        Raises:
+            ValueError: If required columns are missing or contain NaN values
         """
-        # First, let's make sure you didn't forget any columns
-        required_cols = [outcome_col, times_col, units_col, treat_col, post_col]
-        missing_cols = [col for col in required_cols if col not in data.columns]
-        if missing_cols:
-            raise ValueError(f"Oops! These columns are missing: {missing_cols}")
-        
-        # NaNs are the enemy of all econometric analysis
-        for col in required_cols:
-            if data[col].isna().any():
-                raise ValueError(f"Found some NaNs in '{col}' - please clean your data first!")
-        
-        # Store everything and set up our instance variables
-        self.data = data.copy()  # Don't mess with the original data
+        self._validate_columns(data, outcome_col, times_col, units_col, treat_col, post_col)
+
+        # Store configuration
+        self.data = data.copy()
         self.outcome_col = outcome_col
         self.times_col = times_col
         self.units_col = units_col
         self.treat_col = treat_col
         self.post_col = post_col
-        
-        # These will get filled in when we run the analysis
-        self.unit_weights = None  # Weights for control units
-        self.time_weights = None  # Weights for time periods  
-        self.merged_data = None   # Data with weights attached
-        self.treatment_effect = None  # The money shot
-        self.standard_error = None    # How confident should we be?
 
-        # Make sure treatment indicators are actually boolean
-        # (You'd be surprised how often this trips people up)
+        # Results (populated after fitting)
+        self.unit_weights: pd.Series | None = None
+        self.time_weights: pd.Series | None = None
+        self.merged_data: pd.DataFrame | None = None
+        self.treatment_effect: float | None = None
+        self.standard_error: float | None = None
+
+        # Ensure boolean types for indicators
         self.data[self.treat_col] = self.data[self.treat_col].astype(bool)
         self.data[self.post_col] = self.data[self.post_col].astype(bool)
-        
-        # Run some basic validation
-        self._check_data_structure()
-        
-    def _check_data_structure(self) -> None:
-        """
-        Just making sure your data makes sense before we dive in
-        Because there's nothing worse than running a 2-hour analysis on garbage data
-        """
-        # Count treated vs control units
-        treated_units = self.data[self.data[self.treat_col]][self.units_col].nunique()
-        control_units = self.data[~self.data[self.treat_col]][self.units_col].nunique()
-        
-        if treated_units == 0:
-            raise ValueError("No treated units found - did you code the treatment variable correctly?")
-        if control_units == 0:
-            raise ValueError("No control units found - need some comparison group!")
-            
-        # Count pre vs post periods
-        pre_periods = self.data[~self.data[self.post_col]][self.times_col].nunique()
-        post_periods = self.data[self.data[self.post_col]][self.times_col].nunique()
-        
-        if pre_periods == 0:
-            raise ValueError("No pre-treatment periods - we need baseline data!")
-        if post_periods == 0:
-            raise ValueError("No post-treatment periods - what are we even measuring?")
-            
-        logger.info(f"Data looks good! {treated_units} treated units, {control_units} controls, "
-                   f"{pre_periods} pre-periods, {post_periods} post-periods")
 
-    def _calculate_regularization_penalty(self, penalty_multiplier: float = 1.0) -> float:
+        # Validate data structure
+        self._validate_data_structure()
+
+    def _validate_columns(
+        self,
+        data: pd.DataFrame,
+        outcome_col: str,
+        times_col: str,
+        units_col: str,
+        treat_col: str,
+        post_col: str,
+    ) -> None:
+        """Validate that required columns exist and contain no NaN values."""
+        required_cols = [outcome_col, times_col, units_col, treat_col, post_col]
+
+        missing_cols = [col for col in required_cols if col not in data.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
+
+        for col in required_cols:
+            if data[col].isna().any():
+                raise ValueError(f"Column '{col}' contains NaN values. Please clean your data.")
+
+    def _validate_data_structure(self) -> None:
+        """Validate that data has required structure for SDID analysis."""
+        # Count units
+        n_treated = self.data[self.data[self.treat_col]][self.units_col].nunique()
+        n_control = self.data[~self.data[self.treat_col]][self.units_col].nunique()
+
+        if n_treated == 0:
+            raise ValueError("No treated units found. Check your treatment indicator.")
+        if n_control == 0:
+            raise ValueError("No control units found. SDID requires a comparison group.")
+
+        # Count periods
+        n_pre = self.data[~self.data[self.post_col]][self.times_col].nunique()
+        n_post = self.data[self.data[self.post_col]][self.times_col].nunique()
+
+        if n_pre == 0:
+            raise ValueError("No pre-treatment periods found.")
+        if n_post == 0:
+            raise ValueError("No post-treatment periods found.")
+
+        logger.info(
+            f"Data validated: {n_treated} treated units, {n_control} controls, "
+            f"{n_pre} pre-periods, {n_post} post-periods"
+        )
+
+    # =========================================================================
+    # Core Estimation Methods
+    # =========================================================================
+
+    def fit(self, verbose: bool = False) -> float:
         """
-        Calculate the regularization parameter (zeta) for unit weights
-        
-        This prevents overfitting by penalizing extreme weights. The formula comes from 
-        the original paper, but honestly the intuition is "don't put all your eggs 
-        in one basket when weighting control units"
-        
+        Fit the SDID model and estimate the treatment effect.
+
+        This is the main method to run the complete analysis. It:
+        1. Estimates optimal unit weights
+        2. Estimates optimal time weights
+        3. Runs weighted difference-in-differences regression
+
         Args:
-            penalty_multiplier: Dial this up if you want more regularization
-            
+            verbose: If True, print detailed optimization output
+
         Returns:
-            The penalty parameter (higher = more regularization)
+            Estimated average treatment effect on the treated (ATT)
         """
-        # How many treated observations do we have post-treatment?
+        logger.info("Starting SDID analysis...")
+
+        self._estimate_unit_weights(verbose=verbose)
+        self._estimate_time_weights(verbose=verbose)
+        self._merge_weights_with_data()
+        self._run_weighted_regression(verbose=verbose)
+
+        logger.info("SDID analysis complete!")
+
+        return self.treatment_effect
+
+    def _calculate_unit_regularization(self, multiplier: float = 1.0) -> float:
+        """
+        Calculate regularization parameter (zeta) for unit weights.
+
+        The regularization prevents overfitting by penalizing extreme weights.
+        Formula from Arkhangelsky et al. (2021).
+
+        Args:
+            multiplier: Scaling factor for regularization strength
+
+        Returns:
+            Regularization parameter value
+        """
+        # Count treated observations in post-treatment period
         n_treated_post = self.data.query(f"({self.post_col}) & ({self.treat_col})").shape[0]
 
-        # Calculate volatility from control units in pre-period
-        # (This gives us a sense of how noisy the data is)
-        control_pre_data = self.data.query(f"(~{self.post_col}) & (~{self.treat_col})")
-        
-        if control_pre_data.empty:
-            raise ValueError("Need some pre-treatment control data to calculate regularization!")
-        
-        # Standard deviation of first differences (a measure of noise)
-        noise_level = (control_pre_data
-                      .sort_values(self.times_col)
-                      .groupby(self.units_col)[self.outcome_col]
-                      .diff()
-                      .std())
+        # Estimate noise from control units in pre-treatment period
+        control_pre = self.data.query(f"(~{self.post_col}) & (~{self.treat_col})")
 
-        # Handle edge cases (because real data is messy)
+        if control_pre.empty:
+            raise ValueError("No pre-treatment control data available for regularization.")
+
+        # Noise level: std of first differences
+        noise_level = (
+            control_pre.sort_values(self.times_col)
+            .groupby(self.units_col)[self.outcome_col]
+            .diff()
+            .std()
+        )
+
         if np.isnan(noise_level) or noise_level == 0:
-            warnings.warn("Can't estimate noise level from data - using conservative default")
-            noise_level = 0.01
+            warnings.warn(
+                "Cannot estimate noise level from data. Using default value.",
+                stacklevel=2,
+            )
+            noise_level = self.DEFAULT_NOISE_LEVEL
 
-        # The magic formula from the paper
-        penalty = penalty_multiplier * n_treated_post ** (1/4) * noise_level
-        
-        return penalty
+        return multiplier * (n_treated_post**0.25) * noise_level
+
+    def _calculate_time_regularization(self) -> float:
+        """
+        Calculate regularization parameter for time weights.
+
+        Returns:
+            Regularization parameter value
+        """
+        pre_data = self.data[~self.data[self.post_col]]
+
+        if pre_data.empty:
+            return self.DEFAULT_NOISE_LEVEL
+
+        # Volatility across units within time periods
+        time_volatility = pre_data.groupby(self.times_col)[self.outcome_col].std().mean()
+
+        if np.isnan(time_volatility) or time_volatility == 0:
+            time_volatility = self.DEFAULT_NOISE_LEVEL
+
+        n_periods = pre_data[self.times_col].nunique()
+        return time_volatility * (n_periods**-0.25)
 
     def _estimate_unit_weights(self, verbose: bool = False) -> None:
         """
-        Find the optimal weights for control units
-        
-        The goal: weight control units so their pre-treatment average looks as much
-        like the treated units as possible. It's like creating a "synthetic treated unit"
-        from your controls.
-        
-        This solves a quadratic programming problem with L2 regularization.
-        Don't worry if that sounds scary - the computer does the heavy lifting.
+        Estimate optimal weights for control units.
+
+        Solves a quadratic programming problem to find weights that make
+        the weighted average of control units match treated units in
+        pre-treatment periods.
         """
-        logger.info("Finding optimal unit weights... (this might take a moment)")
-        
-        # Calculate how much regularization we need
-        regularization_strength = self._calculate_regularization_penalty()
-        logger.info(f"Using regularization parameter: {regularization_strength:.4f}")
+        logger.info("Estimating unit weights...")
 
-        # Get pre-treatment data only
-        pre_treatment_data = self.data[~self.data[self.post_col]]
-
-        # Create outcome matrix for control units (time x units)
-        control_outcomes = (pre_treatment_data[~pre_treatment_data[self.treat_col]]
-                           .pivot(index=self.times_col, columns=self.units_col, values=self.outcome_col))
-
-        if control_outcomes.empty:
-            raise ValueError("No pre-treatment control data - can't estimate unit weights!")
-
-        # Average outcome for treated units by time period
-        treated_avg_by_time = (pre_treatment_data[pre_treatment_data[self.treat_col]]
-                              .groupby(self.times_col)[self.outcome_col]
-                              .mean())
-
-        if treated_avg_by_time.empty:
-            raise ValueError("No pre-treatment treated data - what are we weighting towards?")
-
-        # Find common time periods (sometimes data is unbalanced)
-        common_times = control_outcomes.index.intersection(treated_avg_by_time.index)
-        
-        if len(common_times) == 0:
-            raise ValueError("No overlapping time periods between treated and control groups!")
-
-        # Filter to common periods
-        control_outcomes = control_outcomes.loc[common_times]
-        treated_avg_by_time = treated_avg_by_time.loc[common_times]
-
-        # Set up the optimization problem
-        n_control_units = control_outcomes.shape[1]
-        n_time_periods = len(common_times)
-        
-        # Decision variables: weights for each control unit
-        unit_weights = cp.Variable(n_control_units, nonneg=True)
-        
-        # Convert to numpy for the optimization
-        Y_control = control_outcomes.values  # T x N_co matrix
-        y_treated = treated_avg_by_time.values  # T x 1 vector
-        
-        # Objective: minimize difference between weighted controls and treated
-        # Plus L2 penalty on weights to prevent overfitting
-        fit_error = cp.sum_squares(Y_control @ unit_weights - y_treated)
-        penalty = regularization_strength * cp.sum_squares(unit_weights)
-        objective = cp.Minimize(fit_error + penalty)
-        
-        # Constraints: weights must be non-negative (we set this above)
-        # No need to constrain weights to sum to 1 - let the data decide
-        constraints = []
-        
-        # Solve the problem
-        problem = cp.Problem(objective, constraints)
-        
-        try:
-            problem.solve(verbose=verbose)
-            
-            if problem.status not in ["infeasible", "unbounded"]:
-                estimated_weights = unit_weights.value
-                
-                # Create a nice series with unit names as index
-                weight_series = pd.Series(
-                    estimated_weights,
-                    index=control_outcomes.columns,
-                    name='weight'
-                )
-                
-                # Only keep units with meaningful weights (reduces noise)
-                self.unit_weights = weight_series[weight_series > 1e-6]
-                
-                logger.info(f"Unit weight estimation completed! Using {len(self.unit_weights)} control units")
-                
-            else:
-                raise ValueError(f"Optimization failed with status: {problem.status}")
-                
-        except Exception as e:
-            raise ValueError(f"Something went wrong with unit weight optimization: {str(e)}")
-
-    def _estimate_time_weights(self, verbose: bool = False) -> None:
-        """
-        Find optimal weights for time periods
-        
-        This is like the unit weights but for time periods. We want to weight
-        time periods so that the pre/post comparison is as balanced as possible.
-        
-        The intuition: some time periods might be more informative than others
-        for identifying the treatment effect.
-        """
-        logger.info("Finding optimal time weights...")
-        
-        # Calculate regularization for time weights
-        time_regularization = self._calculate_time_regularization()
-        logger.info(f"Time regularization parameter: {time_regularization:.4f}")
+        regularization = self._calculate_unit_regularization()
+        logger.info(f"Unit regularization: {regularization:.4f}")
 
         # Get pre-treatment data
         pre_data = self.data[~self.data[self.post_col]]
 
-        # Create matrices for pre-treatment period
-        treated_outcomes = (pre_data[pre_data[self.treat_col]]
-                           .pivot(index=self.units_col, columns=self.times_col, values=self.outcome_col))
-        
-        control_outcomes = (pre_data[~pre_data[self.treat_col]]
-                           .pivot(index=self.units_col, columns=self.times_col, values=self.outcome_col))
+        # Pivot control outcomes: time x units
+        control_matrix = pre_data[~pre_data[self.treat_col]].pivot(
+            index=self.times_col, columns=self.units_col, values=self.outcome_col
+        )
 
-        if treated_outcomes.empty or control_outcomes.empty:
-            raise ValueError("Need both treated and control data to estimate time weights!")
+        if control_matrix.empty:
+            raise ValueError("No pre-treatment control data available.")
 
-        # Find common time periods
-        common_times = treated_outcomes.columns.intersection(control_outcomes.columns)
-        
+        # Average treated outcomes by time
+        treated_avg = (
+            pre_data[pre_data[self.treat_col]].groupby(self.times_col)[self.outcome_col].mean()
+        )
+
+        if treated_avg.empty:
+            raise ValueError("No pre-treatment treated data available.")
+
+        # Align time periods
+        common_times = control_matrix.index.intersection(treated_avg.index)
         if len(common_times) == 0:
-            raise ValueError("No common time periods for time weight estimation!")
+            raise ValueError("No overlapping time periods between treated and control groups.")
 
-        # Filter to common periods
-        treated_outcomes = treated_outcomes[common_times]
-        control_outcomes = control_outcomes[common_times]
+        control_matrix = control_matrix.loc[common_times]
+        treated_avg = treated_avg.loc[common_times]
 
-        # Calculate average outcomes by time
-        treated_time_avg = treated_outcomes.mean(axis=0)
-        control_time_avg = control_outcomes.mean(axis=0)
+        # Set up optimization problem
+        n_units = control_matrix.shape[1]
+        weights = cp.Variable(n_units, nonneg=True)
 
-        # Set up optimization
-        n_time_periods = len(common_times)
-        time_weights = cp.Variable(n_time_periods, nonneg=True)
-        
-        # Convert to numpy
-        y_treated_time = treated_time_avg.values
-        y_control_time = control_time_avg.values
-        
-        # Objective: balance treated and control time trends
-        balance_error = cp.sum_squares(time_weights.T @ (y_treated_time - y_control_time))
-        penalty = time_regularization * cp.sum_squares(time_weights)
-        objective = cp.Minimize(balance_error + penalty)
-        
-        # Solve
+        Y = control_matrix.values
+        y = treated_avg.values
+
+        objective = cp.Minimize(
+            cp.sum_squares(Y @ weights - y) + regularization * cp.sum_squares(weights)
+        )
+
         problem = cp.Problem(objective)
-        
+
         try:
             problem.solve(verbose=verbose)
-            
-            if problem.status not in ["infeasible", "unbounded"]:
-                estimated_time_weights = time_weights.value
-                
-                # Create series with time period names
-                time_weight_series = pd.Series(
-                    estimated_time_weights,
-                    index=common_times,
-                    name='time_weight'
-                )
-                
-                # Keep meaningful weights only
-                self.time_weights = time_weight_series[time_weight_series > 1e-6]
-                
-                logger.info(f"Time weight estimation done! Using {len(self.time_weights)} time periods")
-                
-            else:
-                raise ValueError(f"Time weight optimization failed: {problem.status}")
-                
-        except Exception as e:
-            raise ValueError(f"Time weight optimization error: {str(e)}")
 
-    def _calculate_time_regularization(self) -> float:
-        """
-        Calculate regularization parameter for time weights
-        
-        Similar logic to unit weights but adapted for the time dimension
-        """
-        # Use volatility across units as a guide
-        pre_data = self.data[~self.data[self.post_col]]
-        
-        if pre_data.empty:
-            return 0.01  # Conservative default
-        
-        # Standard deviation across units within each time period
-        time_volatility = (pre_data.groupby(self.times_col)[self.outcome_col]
-                          .std()
-                          .mean())
-        
-        if np.isnan(time_volatility) or time_volatility == 0:
-            time_volatility = 0.01
-            
-        # Scale by number of time periods (more periods = less regularization needed)
-        n_time_periods = pre_data[self.times_col].nunique()
-        regularization = time_volatility * (n_time_periods ** (-1/4))
-        
-        return regularization
+            if problem.status in ["infeasible", "unbounded"]:
+                raise ValueError(f"Optimization failed: {problem.status}")
 
-    def _merge_weights_with_data(self) -> None:
-        """
-        Combine the estimated weights with our original data
-        
-        This creates a single dataset with both unit and time weights attached.
-        Makes the final regression much cleaner.
-        """
-        logger.info("Merging weights with data...")
-        
-        if self.unit_weights is None or self.time_weights is None:
-            raise ValueError("Need to estimate weights first! Call fit_unit_weights() and fit_time_weights()")
-        
-        # Start with a copy of the original data
-        working_data = self.data.copy()
-        
-        # Add unit weights (only for control units)
-        working_data['unit_weight'] = 0.0  # Default weight
-        control_mask = ~working_data[self.treat_col]
-        
-        for unit, weight in self.unit_weights.items():
-            unit_mask = working_data[self.units_col] == unit
-            working_data.loc[control_mask & unit_mask, 'unit_weight'] = weight
-        
-        # Treated units get weight of 1 (they represent themselves)
-        working_data.loc[~control_mask, 'unit_weight'] = 1.0
-        
-        # Add time weights
-        working_data['time_weight'] = 0.0  # Default
-        
-        for time_period, weight in self.time_weights.items():
-            time_mask = working_data[self.times_col] == time_period
-            working_data.loc[time_mask, 'time_weight'] = weight
-        
-        # Combine unit and time weights
-        working_data['combined_weight'] = working_data['unit_weight'] * working_data['time_weight']
-        
-        # Store the result
-        self.merged_data = working_data
-        
-        logger.info("Weights successfully merged with data")
+            weight_series = pd.Series(weights.value, index=control_matrix.columns, name="weight")
+            self.unit_weights = weight_series[weight_series > self.WEIGHT_THRESHOLD]
 
-    def _run_weighted_regression(self, verbose: bool = False) -> None:
-        """
-        Run the final weighted difference-in-differences regression
-        
-        This is where the magic happens! We use the estimated weights to run
-        a standard diff-in-diff regression that should be less biased than
-        the unweighted version.
-        """
-        logger.info("Running weighted diff-in-diff regression...")
-        
-        if self.merged_data is None:
-            raise ValueError("Need merged data! Call _merge_weights_with_data() first")
-        
-        # Create interaction term for treatment effect
-        self.merged_data['treat_post'] = (self.merged_data[self.treat_col] & 
-                                         self.merged_data[self.post_col])
-        
-        # Only use observations with positive weights
-        regression_data = self.merged_data[self.merged_data['combined_weight'] > 0].copy()
-        
-        if regression_data.empty:
-            raise ValueError("No observations with positive weights - something went wrong!")
-        
-        # Set up the regression formula
-        # This is a standard diff-in-diff specification
-        formula = (f"{self.outcome_col} ~ {self.treat_col} + {self.post_col} + treat_post")
-        
-        try:
-            # Run weighted OLS
-            model = smf.wls(formula, 
-                           data=regression_data, 
-                           weights=regression_data['combined_weight'])
-            results = model.fit()
-            
-            # Extract the treatment effect (coefficient on the interaction term)
-            self.treatment_effect = results.params['treat_post[T.True]']
-            
-            if verbose:
-                print("\n" + "="*50)
-                print("SDID REGRESSION RESULTS")
-                print("="*50)
-                print(results.summary())
-                print("="*50)
-                
-            logger.info(f"Treatment effect estimated: {self.treatment_effect:.4f}")
-            
-        except Exception as e:
-            raise ValueError(f"Weighted regression failed: {str(e)}")
-
-    def get_treatment_effect(self) -> float:
-        """
-        Get the estimated treatment effect
-        
-        Returns:
-            The SDID estimate of the average treatment effect
-        """
-        if self.treatment_effect is None:
-            raise ValueError("Haven't run the analysis yet! Call run_analysis() first")
-        
-        return self.treatment_effect
-
-    def run_full_analysis(self, verbose: bool = False) -> float:
-        """
-        Run the complete SDID analysis from start to finish
-        
-        This is the main method you'll probably want to use. It does everything:
-        1. Estimates unit weights
-        2. Estimates time weights  
-        3. Merges weights with data
-        4. Runs weighted regression
-        5. Returns treatment effect
-        
-        Args:
-            verbose: Print detailed output?
-            
-        Returns:
-            Estimated treatment effect
-        """
-        logger.info("Starting complete SDID analysis...")
-        
-        # Step 1: Unit weights
-        self._estimate_unit_weights(verbose=verbose)
-        
-        # Step 2: Time weights
-        self._estimate_time_weights(verbose=verbose)
-        
-        # Step 3: Merge everything
-        self._merge_weights_with_data()
-        
-        # Step 4: Final regression
-        self._run_weighted_regression(verbose=verbose)
-        
-        logger.info("SDID analysis complete! 🎉")
-        
-        return self.treatment_effect
-
-    def run_event_study(self, times: List[Union[int, float, str]]) -> pd.Series:
-        """
-        Run the SDID analysis for each specified time period to create an event study plot.
-        
-        This method estimates treatment effects at different time points by
-        treating each time as the "post" period.
-        
-        Args:
-            times: List of time periods to analyze
-            
-        Returns:
-            pd.Series: Treatment effects indexed by time
-        """
-        logger.info(f"Running event study for {len(times)} time periods...")
-        effects_dict = {}
-        
-        for time in times:
-            # Filter data: include observations not in post-treatment or in the current time
-            filtered_data = self.data[(~self.data[self.post_col]) | 
-                                     (self.data[self.times_col] == time)].copy()
-
-            # Check if filtered_data has both treated and control groups
-            treated_count = filtered_data[filtered_data[self.treat_col]].shape[0]
-            control_count = filtered_data[~filtered_data[self.treat_col]].shape[0]
-            
-            if treated_count == 0 or control_count == 0:
-                logger.warning(f"Time {time}: Insufficient treated or control observations. Skipping.")
-                effects_dict[time] = np.nan
-                continue
-
-            # Initialize a new SDID instance with the filtered data
-            sdid_instance = SyntheticDiffInDiff(
-                data=filtered_data,
-                outcome_col=self.outcome_col,
-                times_col=self.times_col,
-                units_col=self.units_col,
-                treat_col=self.treat_col,
-                post_col=self.post_col
+            logger.info(
+                f"Unit weights estimated: {len(self.unit_weights)} units with non-zero weights"
             )
 
-            try:
-                # Run the analysis and get the treatment effect
-                effect = sdid_instance.run_analysis()
-                effects_dict[time] = effect
-            except Exception as e:
-                # Handle exceptions and assign NaN
-                logger.warning(f"Time {time}: Analysis failed with error: {e}")
-                effects_dict[time] = np.nan
+        except Exception as e:
+            raise ValueError(f"Unit weight optimization failed: {e!s}") from e
 
-        # Convert the dictionary to a Pandas Series
-        effects = pd.Series(effects_dict, name="treatment_effect")
-        return effects
+    def _estimate_time_weights(self, verbose: bool = False) -> None:
+        """
+        Estimate optimal weights for time periods.
 
-    def make_random_placebo(self) -> pd.DataFrame:
+        Solves an optimization problem to find time weights that balance
+        pre-treatment comparisons between treated and control groups.
         """
-        Create a placebo dataset by randomly selecting a control unit and marking it as treated.
-        
-        This is used for placebo tests to estimate standard errors.
-        
-        Returns:
-            pd.DataFrame: Placebo dataset with a randomly selected control unit marked as treated
-            
-        Raises:
-            ValueError: If no control units are available
-        """
-        # Extract control group data
-        control_data = self.data[~self.data[self.treat_col]]
-        # Get unique control units
-        control_units = control_data[self.units_col].unique()
-        if len(control_units) == 0:
-            raise ValueError("No control units available to create a placebo.")
-        # Randomly select a control unit
-        placebo_unit = np.random.choice(control_units)
-        # Mark the selected unit as treated throughout
-        placebo_data = self.data.copy()
-        mask = (placebo_data[self.units_col] == placebo_unit)
-        placebo_data.loc[mask, self.treat_col] = True
-        # Ensure treat_col is boolean
-        placebo_data[self.treat_col] = placebo_data[self.treat_col].astype(bool)
-        return placebo_data
+        logger.info("Estimating time weights...")
 
-    def estimate_se(self, bootstrap_rounds: int = 400, seed: int = 0, n_jobs: int = 1) -> None:
+        regularization = self._calculate_time_regularization()
+        logger.info(f"Time regularization: {regularization:.4f}")
+
+        pre_data = self.data[~self.data[self.post_col]]
+
+        # Pivot: units x time
+        treated_matrix = pre_data[pre_data[self.treat_col]].pivot(
+            index=self.units_col, columns=self.times_col, values=self.outcome_col
+        )
+        control_matrix = pre_data[~pre_data[self.treat_col]].pivot(
+            index=self.units_col, columns=self.times_col, values=self.outcome_col
+        )
+
+        if treated_matrix.empty or control_matrix.empty:
+            raise ValueError("Insufficient data for time weight estimation.")
+
+        common_times = treated_matrix.columns.intersection(control_matrix.columns)
+        if len(common_times) == 0:
+            raise ValueError("No common time periods for time weight estimation.")
+
+        treated_matrix = treated_matrix[common_times]
+        control_matrix = control_matrix[common_times]
+
+        # Time averages
+        treated_avg = treated_matrix.mean(axis=0).values
+        control_avg = control_matrix.mean(axis=0).values
+
+        # Optimization
+        n_periods = len(common_times)
+        weights = cp.Variable(n_periods, nonneg=True)
+
+        diff = treated_avg - control_avg
+        objective = cp.Minimize(
+            cp.sum_squares(weights.T @ diff) + regularization * cp.sum_squares(weights)
+        )
+
+        problem = cp.Problem(objective)
+
+        try:
+            problem.solve(verbose=verbose)
+
+            if problem.status in ["infeasible", "unbounded"]:
+                raise ValueError(f"Optimization failed: {problem.status}")
+
+            weight_series = pd.Series(weights.value, index=common_times, name="time_weight")
+            self.time_weights = weight_series[weight_series > self.WEIGHT_THRESHOLD]
+
+            logger.info(
+                f"Time weights estimated: {len(self.time_weights)} periods with non-zero weights"
+            )
+
+        except Exception as e:
+            raise ValueError(f"Time weight optimization failed: {e!s}") from e
+
+    def _merge_weights_with_data(self) -> None:
+        """Merge estimated weights with the original data."""
+        logger.info("Merging weights with data...")
+
+        if self.unit_weights is None or self.time_weights is None:
+            raise ValueError("Weights must be estimated before merging.")
+
+        df = self.data.copy()
+
+        # Initialize weight columns
+        df["unit_weight"] = 0.0
+        df["time_weight"] = 0.0
+
+        # Assign unit weights (control units only; treated units get weight 1)
+        control_mask = ~df[self.treat_col]
+        for unit, weight in self.unit_weights.items():
+            mask = control_mask & (df[self.units_col] == unit)
+            df.loc[mask, "unit_weight"] = weight
+
+        df.loc[~control_mask, "unit_weight"] = 1.0
+
+        # Assign time weights
+        for period, weight in self.time_weights.items():
+            df.loc[df[self.times_col] == period, "time_weight"] = weight
+
+        # Combined weight
+        df["combined_weight"] = df["unit_weight"] * df["time_weight"]
+
+        self.merged_data = df
+        logger.info("Weights merged successfully")
+
+    def _run_weighted_regression(self, verbose: bool = False) -> None:
+        """Run weighted difference-in-differences regression."""
+        logger.info("Running weighted regression...")
+
+        if self.merged_data is None:
+            raise ValueError("Data must be merged before running regression.")
+
+        df = self.merged_data.copy()
+
+        # Create interaction term
+        df["treat_post"] = df[self.treat_col] & df[self.post_col]
+
+        # Filter to observations with positive weights
+        df = df[df["combined_weight"] > 0]
+
+        if df.empty:
+            raise ValueError("No observations with positive weights.")
+
+        formula = f"{self.outcome_col} ~ {self.treat_col} + {self.post_col} + treat_post"
+
+        try:
+            model = smf.wls(formula, data=df, weights=df["combined_weight"])
+            results = model.fit()
+
+            self.treatment_effect = results.params["treat_post[T.True]"]
+
+            if verbose:
+                print("\n" + "=" * 60)
+                print("SDID REGRESSION RESULTS")
+                print("=" * 60)
+                print(results.summary())
+                print("=" * 60)
+
+            logger.info(f"Treatment effect: {self.treatment_effect:.4f}")
+
+        except Exception as e:
+            raise ValueError(f"Weighted regression failed: {e!s}") from e
+
+    # =========================================================================
+    # Inference Methods
+    # =========================================================================
+
+    def estimate_se(
+        self,
+        n_bootstrap: int = 400,
+        seed: int | None = 0,
+        n_jobs: int = 1,
+    ) -> float:
         """
-        Estimate the standard error of the treatment effect using placebo tests.
-        
-        This method runs multiple placebo tests where control units are randomly
-        marked as treated, and computes the standard deviation of the resulting
-        placebo effects.
-        
+        Estimate standard error using placebo bootstrap.
+
+        Randomly assigns treatment to control units and re-estimates
+        the effect to build a distribution of placebo effects.
+
         Args:
-            bootstrap_rounds: Number of placebo tests to run
-            seed: Random seed for reproducibility
-            n_jobs: Number of parallel jobs to run
+            n_bootstrap: Number of bootstrap iterations
+            seed: Random seed for reproducibility (None for no seed)
+            n_jobs: Number of parallel jobs (-1 for all cores)
+
+        Returns:
+            Estimated standard error
         """
-        logger.info(f"Estimating standard error with {bootstrap_rounds} placebo tests...")
-        np.random.seed(seed)
-        
-        sdid_fn = partial(
-            self._synthetic_diff_in_diff_placebo,
+        logger.info(f"Estimating standard error with {n_bootstrap} bootstrap samples...")
+
+        if seed is not None:
+            np.random.seed(seed)
+
+        placebo_fn = partial(
+            self._run_placebo,
             outcome_col=self.outcome_col,
             times_col=self.times_col,
             units_col=self.units_col,
             treat_col=self.treat_col,
-            post_col=self.post_col
+            post_col=self.post_col,
         )
 
         effects = Parallel(n_jobs=n_jobs)(
-            delayed(sdid_fn)(self.make_random_placebo())
-            for _ in range(bootstrap_rounds)
+            delayed(placebo_fn)(self._create_placebo_data()) for _ in range(n_bootstrap)
         )
 
-        # Remove NaN values and compute standard error
         valid_effects = [e for e in effects if not np.isnan(e)]
-        if len(valid_effects) < 10:
-            warnings.warn(f"Only {len(valid_effects)} valid placebo effects. Standard error may be unreliable.")
-        
-        self.standard_error = np.std(valid_effects, ddof=1) if valid_effects else np.nan
-        logger.info(f"Standard error estimated: {self.standard_error:.4f}")
 
-    def _synthetic_diff_in_diff_placebo(self, 
-                                       placebo_data: pd.DataFrame, 
-                                       outcome_col: str, 
-                                       times_col: str, 
-                                       units_col: str, 
-                                       treat_col: str, 
-                                       post_col: str) -> float:
-        """
-        Helper function to compute the SDID treatment effect on placebo data.
-        
-        Args:
-            placebo_data: Placebo dataset
-            outcome_col: Name of outcome column
-            times_col: Name of time column
-            units_col: Name of unit column
-            treat_col: Name of treatment column
-            post_col: Name of post-treatment column
-            
-        Returns:
-            float: Placebo treatment effect or NaN if estimation fails
-        """
-        # Initialize a new SDID instance with placebo data
-        sdid_placebo = SyntheticDiffInDiff(
-            data=placebo_data,
-            outcome_col=outcome_col,
-            times_col=times_col,
-            units_col=units_col,
-            treat_col=treat_col,
-            post_col=post_col
-        )
+        if len(valid_effects) < 10:
+            warnings.warn(
+                f"Only {len(valid_effects)} valid placebo effects. "
+                "Standard error estimate may be unreliable.",
+                stacklevel=2,
+            )
+
+        self.standard_error = np.std(valid_effects, ddof=1) if valid_effects else np.nan
+        logger.info(f"Standard error: {self.standard_error:.4f}")
+
+        return self.standard_error
+
+    def _create_placebo_data(self) -> pd.DataFrame:
+        """Create placebo dataset by randomly assigning a control unit to treatment."""
+        control_units = self.data[~self.data[self.treat_col]][self.units_col].unique()
+
+        if len(control_units) == 0:
+            raise ValueError("No control units available for placebo test.")
+
+        placebo_unit = np.random.choice(control_units)
+
+        df = self.data.copy()
+        df.loc[df[self.units_col] == placebo_unit, self.treat_col] = True
+        df[self.treat_col] = df[self.treat_col].astype(bool)
+
+        return df
+
+    def _run_placebo(
+        self,
+        data: pd.DataFrame,
+        outcome_col: str,
+        times_col: str,
+        units_col: str,
+        treat_col: str,
+        post_col: str,
+    ) -> float:
+        """Run SDID on placebo data and return estimated effect."""
         try:
-            effect = sdid_placebo.run_analysis()
-            return effect
+            sdid = SyntheticDiffInDiff(
+                data=data,
+                outcome_col=outcome_col,
+                times_col=times_col,
+                units_col=units_col,
+                treat_col=treat_col,
+                post_col=post_col,
+            )
+            return sdid.fit()
         except Exception:
             return np.nan
 
-    def make_figure(self, 
-                   times: List[Union[int, float, str]], 
-                   bootstrap_rounds: int = 400, 
-                   seed: int = 0, 
-                   n_jobs: int = 1,
-                   confidence_level: float = 0.90,
-                   figure_size: Tuple[int, int] = (12, 6)) -> plt.Figure:
+    # =========================================================================
+    # Event Study Methods
+    # =========================================================================
+
+    def run_event_study(self, times: list[int | float | str]) -> pd.Series:
         """
-        Plot the treatment effect over time with confidence intervals.
-        
+        Run SDID for multiple time periods (event study).
+
+        Estimates treatment effects at each specified time point,
+        useful for examining dynamic treatment effects.
+
         Args:
             times: List of time periods to analyze
-            bootstrap_rounds: Number of bootstrap rounds for standard error estimation
+
+        Returns:
+            Series of treatment effects indexed by time
+        """
+        logger.info(f"Running event study for {len(times)} time periods...")
+
+        effects = {}
+
+        for t in times:
+            # Filter: pre-treatment periods + current period
+            mask = (~self.data[self.post_col]) | (self.data[self.times_col] == t)
+            filtered = self.data[mask].copy()
+
+            # Check data availability
+            n_treated = filtered[filtered[self.treat_col]].shape[0]
+            n_control = filtered[~filtered[self.treat_col]].shape[0]
+
+            if n_treated == 0 or n_control == 0:
+                logger.warning(f"Time {t}: Insufficient data, skipping.")
+                effects[t] = np.nan
+                continue
+
+            try:
+                sdid = SyntheticDiffInDiff(
+                    data=filtered,
+                    outcome_col=self.outcome_col,
+                    times_col=self.times_col,
+                    units_col=self.units_col,
+                    treat_col=self.treat_col,
+                    post_col=self.post_col,
+                )
+                effects[t] = sdid.fit()
+            except Exception as e:
+                logger.warning(f"Time {t}: Analysis failed - {e}")
+                effects[t] = np.nan
+
+        return pd.Series(effects, name="treatment_effect")
+
+    # =========================================================================
+    # Visualization Methods
+    # =========================================================================
+
+    def plot_event_study(
+        self,
+        times: list[int | float | str],
+        n_bootstrap: int = 400,
+        seed: int | None = 0,
+        n_jobs: int = 1,
+        confidence_level: float = 0.90,
+        figsize: tuple[int, int] = (12, 6),
+    ) -> plt.Figure:
+        """
+        Create event study plot with confidence intervals.
+
+        Args:
+            times: List of time periods to analyze
+            n_bootstrap: Number of bootstrap iterations for SE estimation
             seed: Random seed for reproducibility
             n_jobs: Number of parallel jobs
             confidence_level: Confidence level for intervals (default: 0.90)
-            figure_size: Figure size as (width, height) tuple
-            
+            figsize: Figure size as (width, height)
+
         Returns:
-            matplotlib.figure.Figure: The generated figure
+            matplotlib Figure object
         """
-        logger.info("Creating event study figure...")
-        
-        # Run event study to get treatment effects over time
+        logger.info("Creating event study plot...")
+
+        # Get point estimates
         effects = self.run_event_study(times)
 
-        # Estimate standard errors for each time point
-        standard_errors = {}
-        for time in times:
-            # Filter data
-            filtered_data = self.data[(~self.data[self.post_col]) | 
-                                     (self.data[self.times_col] == time)].copy()
-            
-            # Initialize SDID instance
-            sdid_instance = SyntheticDiffInDiff(
-                data=filtered_data,
-                outcome_col=self.outcome_col,
-                times_col=self.times_col,
-                units_col=self.units_col,
-                treat_col=self.treat_col,
-                post_col=self.post_col
-            )
-            try:
-                # Estimate standard error
-                sdid_instance.estimate_se(
-                    bootstrap_rounds=bootstrap_rounds,
-                    seed=seed,
-                    n_jobs=n_jobs
-                )
-                standard_errors[time] = sdid_instance.standard_error
-            except Exception as e:
-                logger.warning(f"Standard error estimation at time {time} failed: {e}")
-                standard_errors[time] = np.nan
+        # Estimate standard errors for each period
+        se_dict = {}
+        for t in times:
+            mask = (~self.data[self.post_col]) | (self.data[self.times_col] == t)
+            filtered = self.data[mask].copy()
 
-        # Convert standard errors to Series
-        standard_errors = pd.Series(standard_errors)
-        
-        # Calculate critical value for confidence intervals
-        from scipy import stats
-        z_score = stats.norm.ppf((1 + confidence_level) / 2)
-        
-        # Plotting
-        fig, ax = plt.subplots(figsize=figure_size)
-        ax.plot(effects.index, effects.values, marker='o', linewidth=2, 
-                markersize=8, label='Treatment Effect')
-        
-        # Add confidence intervals
-        ci_lower = effects - z_score * standard_errors
-        ci_upper = effects + z_score * standard_errors
-        ax.fill_between(effects.index, ci_lower, ci_upper, 
-                       color='skyblue', alpha=0.4, 
-                       label=f'{int(confidence_level*100)}% Confidence Interval')
-        
-        # Add reference line at zero
-        ax.axhline(0, color='grey', linestyle='--', alpha=0.7)
-        
-        # Formatting
-        ax.set_xlabel('Time', fontsize=12)
-        ax.set_ylabel('Treatment Effect', fontsize=12)
-        ax.set_title('Synthetic DiD Treatment Effect Over Time', fontsize=14)
+            try:
+                sdid = SyntheticDiffInDiff(
+                    data=filtered,
+                    outcome_col=self.outcome_col,
+                    times_col=self.times_col,
+                    units_col=self.units_col,
+                    treat_col=self.treat_col,
+                    post_col=self.post_col,
+                )
+                sdid.estimate_se(n_bootstrap=n_bootstrap, seed=seed, n_jobs=n_jobs)
+                se_dict[t] = sdid.standard_error
+            except Exception as e:
+                logger.warning(f"SE estimation at time {t} failed: {e}")
+                se_dict[t] = np.nan
+
+        se = pd.Series(se_dict)
+
+        # Calculate confidence intervals
+        z = stats.norm.ppf((1 + confidence_level) / 2)
+        ci_lower = effects - z * se
+        ci_upper = effects + z * se
+
+        # Create plot
+        fig, ax = plt.subplots(figsize=figsize)
+
+        ax.plot(
+            effects.index,
+            effects.values,
+            marker="o",
+            linewidth=2,
+            markersize=8,
+            label="Treatment Effect",
+            color="#2563eb",
+        )
+
+        ax.fill_between(
+            effects.index,
+            ci_lower,
+            ci_upper,
+            alpha=0.3,
+            color="#2563eb",
+            label=f"{int(confidence_level * 100)}% CI",
+        )
+
+        ax.axhline(0, color="gray", linestyle="--", alpha=0.7)
+
+        ax.set_xlabel("Time", fontsize=12)
+        ax.set_ylabel("Treatment Effect", fontsize=12)
+        ax.set_title("Synthetic Difference-in-Differences: Event Study", fontsize=14)
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
-        
-        # Rotate x-axis labels if necessary
+
         if len(times) > 10:
             plt.xticks(rotation=45)
-        
+
         plt.tight_layout()
-        
         return fig
-    
-    def get_weights_summary(self) -> Dict[str, pd.DataFrame]:
+
+    # =========================================================================
+    # Utility Methods
+    # =========================================================================
+
+    def get_weights_summary(self) -> dict[str, pd.DataFrame]:
         """
-        Get a summary of the estimated weights.
-        
+        Get summary of estimated weights.
+
         Returns:
-            Dict containing DataFrames with unit and time weights information
+            Dictionary with 'unit_weights' and 'time_weights' DataFrames
         """
         if self.unit_weights is None or self.time_weights is None:
-            raise ValueError("Weights have not been estimated yet.")
-        
-        # Unit weights summary
-        unit_summary = pd.DataFrame({
-            'weight': self.unit_weights,
-            'rank': self.unit_weights.rank(ascending=False, method='min')
-        }).sort_values('weight', ascending=False)
-        
-        # Time weights summary  
-        time_summary = pd.DataFrame({
-            'weight': self.time_weights,
-            'rank': self.time_weights.rank(ascending=False, method='min')
-        }).sort_values('weight', ascending=False)
-        
-        return {
-            'unit_weights': unit_summary,
-            'time_weights': time_summary
-        }
+            raise ValueError("Weights not yet estimated. Call fit() first.")
+
+        unit_df = pd.DataFrame(
+            {
+                "weight": self.unit_weights,
+                "rank": self.unit_weights.rank(ascending=False, method="min"),
+            }
+        ).sort_values("weight", ascending=False)
+
+        time_df = pd.DataFrame(
+            {
+                "weight": self.time_weights,
+                "rank": self.time_weights.rank(ascending=False, method="min"),
+            }
+        ).sort_values("weight", ascending=False)
+
+        return {"unit_weights": unit_df, "time_weights": time_df}
+
+    @property
+    def is_fitted(self) -> bool:
+        """Check if the model has been fitted."""
+        return self.treatment_effect is not None
+
+    def summary(self) -> str:
+        """
+        Generate a text summary of the analysis results.
+
+        Returns:
+            Formatted summary string
+        """
+        if not self.is_fitted:
+            return "Model not yet fitted. Call fit() first."
+
+        lines = [
+            "=" * 50,
+            "Synthetic Difference-in-Differences Results",
+            "=" * 50,
+            f"Treatment Effect (ATT): {self.treatment_effect:.4f}",
+        ]
+
+        if self.standard_error is not None:
+            lines.append(f"Standard Error:        {self.standard_error:.4f}")
+            t_stat = self.treatment_effect / self.standard_error
+            p_value = 2 * (1 - stats.norm.cdf(abs(t_stat)))
+            lines.append(f"t-statistic:           {t_stat:.4f}")
+            lines.append(f"p-value:               {p_value:.4f}")
+
+        if self.unit_weights is not None:
+            lines.append(f"Control units used:    {len(self.unit_weights)}")
+        if self.time_weights is not None:
+            lines.append(f"Time periods used:     {len(self.time_weights)}")
+
+        lines.append("=" * 50)
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        """String representation."""
+        status = "fitted" if self.is_fitted else "not fitted"
+        return f"SyntheticDiffInDiff(outcome='{self.outcome_col}', status={status})"
