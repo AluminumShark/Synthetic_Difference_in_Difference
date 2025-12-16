@@ -9,7 +9,7 @@ authors = [
     { name = "Levi", email = "daiyublossom@gmail.com" }
 ]
 maintainers = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "Levi", email = "daiyublossom@gmail.com" }
 ]
 keywords = [
     "causal-inference",
@@ -67,6 +67,7 @@ build-backend = "hatchling.build"
 include = [
     "/src",
     "/tests",
+    "/examples",
     "/README.md",
     "/LICENSE",
 ]
