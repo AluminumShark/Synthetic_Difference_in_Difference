@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from SDID import SyntheticDiffInDiff
+from sdid import SyntheticDiffInDiff
 
 # =============================================================================
 # Fixtures - Test Data Generation
