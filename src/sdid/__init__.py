@@ -20,5 +20,5 @@ Example:
 from sdid.core import SyntheticDiffInDiff
 
 __all__ = ["SyntheticDiffInDiff"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
