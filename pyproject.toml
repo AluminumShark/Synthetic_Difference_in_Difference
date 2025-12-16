@@ -6,7 +6,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "Levi", email = "daiyublossom@gmail.com" }
 ]
 maintainers = [
     { name = "Your Name", email = "your.email@example.com" }
@@ -46,11 +46,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/sdid"
-Documentation = "https://github.com/yourusername/sdid#readme"
-Repository = "https://github.com/yourusername/sdid"
-Issues = "https://github.com/yourusername/sdid/issues"
-Changelog = "https://github.com/yourusername/sdid/releases"
+Homepage = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference"
+Documentation = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/blob/main/README.md"
+Repository = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference"
+Issues = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/issues"
+Changelog = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/releases/tag/SDID"
 
 [project.optional-dependencies]
 dev = [
