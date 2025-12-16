@@ -401,9 +401,12 @@ class SyntheticDiffInDiff:
 
         df.loc[~control_mask, "unit_weight"] = 1.0
 
-        # Assign time weights
+        # Assign time weights (pre-treatment periods get estimated weights)
         for period, weight in self.time_weights.items():
             df.loc[df[self.times_col] == period, "time_weight"] = weight
+
+        # Post-treatment periods get uniform weight of 1
+        df.loc[df[self.post_col], "time_weight"] = 1.0
 
         # Combined weight
         df["combined_weight"] = df["unit_weight"] * df["time_weight"]
