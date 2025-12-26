@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AluminumShark/Synthetic_Difference_in_Difference/blob/main/examples/example.ipynb)
+
 [English](#english) | [繁體中文](#繁體中文)
 
 ---
@@ -73,17 +75,31 @@ pip install sdid
 **From Source**
 
 ```bash
-git clone https://github.com/yourusername/sdid.git
-cd sdid
+git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
+cd Synthetic_Difference_in_Difference
 pip install .
 ```
 
 **Development Installation**
 
 ```bash
-git clone https://github.com/yourusername/sdid.git
-cd sdid
+git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
+cd Synthetic_Difference_in_Difference
 uv sync --extra dev
+```
+
+### Examples
+
+> **See it in action:** [`examples/example.ipynb`](examples/example.ipynb)  
+> Complete walkthrough: model fitting, bootstrap SE, event study analysis, and visualization.
+
+#### Run the notebook locally
+
+```bash
+git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
+cd Synthetic_Difference_in_Difference
+uv sync --extra dev
+uv run jupyter lab examples/example.ipynb
 ```
 
 ### Quick Start
@@ -313,17 +329,31 @@ pip install sdid
 **從原始碼安裝**
 
 ```bash
-git clone https://github.com/yourusername/sdid.git
-cd sdid
+git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
+cd Synthetic_Difference_in_Difference
 pip install .
 ```
 
 **開發安裝**
 
 ```bash
-git clone https://github.com/yourusername/sdid.git
-cd sdid
+git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
+cd Synthetic_Difference_in_Difference
 uv sync --extra dev
+```
+
+### 範例
+
+> **實際操作範例：** [`examples/example.ipynb`](examples/example.ipynb)  
+> 完整教學：模型擬合、bootstrap 標準誤、事件研究分析、視覺化。
+
+#### 在本機執行 notebook
+
+```bash
+git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
+cd Synthetic_Difference_in_Difference
+uv sync --extra dev
+uv run jupyter lab examples/example.ipynb
 ```
 
 ### 快速開始
