@@ -1,6 +1,6 @@
 [project]
 name = "sdid"
-version = "0.3.3"
+version = "0.3.4"
 description = "Synthetic Difference-in-Differences (SDID) for causal inference in Python"
 readme = "README.md"
 license = { text = "MIT" }
