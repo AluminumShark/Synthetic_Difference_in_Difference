@@ -144,11 +144,44 @@ TX    2020  108.7    1        1
 |--------|-------------|
 | `fit(verbose=False)` | Fit model and return treatment effect |
 | `estimate_se(n_bootstrap, seed, n_jobs)` | Estimate standard error via placebo bootstrap |
-| `summary()` | Return formatted results summary |
+| `summary(confidence_level=0.95)` | Return formatted results with customizable CI |
 | `run_event_study(times)` | Estimate effects for multiple periods |
 | `plot_event_study(times, ...)` | Create event study plot with confidence intervals |
+| `plot_raw_trends(...)` | Plot raw trends for treated vs control units |
+| `plot_synthetic_control(...)` | Plot treated unit vs synthetic control |
 | `get_weights_summary()` | Return unit and time weights |
 | `is_fitted` | Property to check if model is fitted |
+
+### Visualization
+
+```python
+# Plot raw trends: treated unit vs all control units
+sdid.plot_raw_trends(
+    title="Raw Data: Treated vs Controls",
+    treated_color="red",
+    control_color="gray"
+)
+
+# Plot synthetic control comparison
+sdid.plot_synthetic_control(
+    title="SDID: Actual vs Synthetic",
+    treated_color="blue",
+    synthetic_color="orange"
+)
+```
+
+### Customizable Confidence Interval
+
+```python
+# Default 95% confidence interval
+print(sdid.summary())
+
+# Custom 90% confidence interval
+print(sdid.summary(confidence_level=0.90))
+
+# Custom 99% confidence interval
+print(sdid.summary(confidence_level=0.99))
+```
 
 ### Event Study
 
@@ -351,11 +384,44 @@ TX    2020  108.7    1        1
 |------|------|
 | `fit(verbose=False)` | 擬合模型並回傳處理效果 |
 | `estimate_se(n_bootstrap, seed, n_jobs)` | 透過安慰劑 bootstrap 估計標準誤 |
-| `summary()` | 回傳格式化的結果摘要 |
+| `summary(confidence_level=0.95)` | 回傳格式化結果，可自訂信賴區間 |
 | `run_event_study(times)` | 估計多個時間點的效果 |
 | `plot_event_study(times, ...)` | 繪製帶信賴區間的事件研究圖 |
+| `plot_raw_trends(...)` | 繪製處理組與控制組的原始趨勢 |
+| `plot_synthetic_control(...)` | 繪製處理單位與合成控制的比較 |
 | `get_weights_summary()` | 回傳單位和時間權重 |
 | `is_fitted` | 檢查模型是否已擬合的屬性 |
+
+### 視覺化
+
+```python
+# 繪製原始趨勢：處理單位 vs 所有控制單位
+sdid.plot_raw_trends(
+    title="原始資料：處理組 vs 控制組",
+    treated_color="red",
+    control_color="gray"
+)
+
+# 繪製合成控制比較圖
+sdid.plot_synthetic_control(
+    title="SDID：實際值 vs 合成控制",
+    treated_color="blue",
+    synthetic_color="orange"
+)
+```
+
+### 自訂信賴區間
+
+```python
+# 預設 95% 信賴區間
+print(sdid.summary())
+
+# 自訂 90% 信賴區間
+print(sdid.summary(confidence_level=0.90))
+
+# 自訂 99% 信賴區間
+print(sdid.summary(confidence_level=0.99))
+```
 
 ### 事件研究
 
