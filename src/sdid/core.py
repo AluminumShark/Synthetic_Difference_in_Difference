@@ -890,11 +890,7 @@ class SyntheticDiffInDiff:
 
         # Adjust level (intercept) - SDID matches trends, not levels
         # Align them in the pre-treatment period
-        common_pre = [
-            p
-            for p in pre_periods
-            if p in treated_outcome.index and p in synthetic_trend.index
-        ]
+        common_pre = [p for p in pre_periods if p in treated_outcome.index and p in synthetic_trend.index]
 
         if len(common_pre) == 0:
             raise ValueError("No common pre-treatment periods for level adjustment.")
@@ -980,7 +976,8 @@ class SyntheticDiffInDiff:
         Generate a text summary of the analysis results.
 
         Args:
-            confidence_level: Confidence level for the interval (default: 0.95)
+            confidence_level: Confidence level for the confidence interval
+                (default 0.95 for 95% CI). Must be between 0 and 1.
 
         Returns:
             Formatted summary string
@@ -998,13 +995,13 @@ class SyntheticDiffInDiff:
         if self.standard_error is not None:
             lines.append(f"Standard Error:        {self.standard_error:.4f}")
 
+            # Calculate confidence interval
             z = stats.norm.ppf((1 + confidence_level) / 2)
             ci_lower = self.treatment_effect - z * self.standard_error
             ci_upper = self.treatment_effect + z * self.standard_error
-
-            ci_str = f"[{ci_lower:.4f}, {ci_upper:.4f}]"
+            ci_pct = int(confidence_level * 100)
             lines.append(
-                f"{int(confidence_level * 100)}% Confidence Interval: {ci_str}"
+                f"{ci_pct}% Confidence Interval: [{ci_lower:.4f}, {ci_upper:.4f}]"
             )
 
             t_stat = self.treatment_effect / self.standard_error
