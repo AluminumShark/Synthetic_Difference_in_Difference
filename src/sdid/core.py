@@ -733,6 +733,209 @@ class SyntheticDiffInDiff:
         plt.tight_layout()
         return fig
 
+    def plot_raw_trends(
+        self,
+        treatment_time: int | float | str | None = None,
+        figsize: tuple[int, int] = (10, 6),
+        control_color: str = "lightgray",
+        control_alpha: float = 0.3,
+        avg_control_color: str = "gray",
+        treated_color: str = "red",
+        title: str | None = None,
+    ) -> plt.Figure:
+        """
+        Plot raw trends comparing treated unit(s) against control units.
+
+        This visualization shows the original data without any weighting,
+        displaying all control units, their average, and the treated unit(s).
+
+        Args:
+            treatment_time: Time point of intervention. If None, uses the first
+                post-treatment period from the data.
+            figsize: Figure size as (width, height)
+            control_color: Color for individual control unit lines
+            control_alpha: Transparency for individual control unit lines
+            avg_control_color: Color for average control line
+            treated_color: Color for treated unit line
+            title: Custom title for the plot. If None, uses default title.
+
+        Returns:
+            matplotlib Figure object
+        """
+        logger.info("Creating raw trends plot...")
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # Determine treatment time
+        if treatment_time is None:
+            treatment_time = self.data[self.data[self.post_col]][self.times_col].min()
+
+        # Get control and treated data
+        control_data = self.data[~self.data[self.treat_col]]
+        treated_data = self.data[self.data[self.treat_col]]
+
+        # Plot all control units
+        for unit in control_data[self.units_col].unique():
+            unit_data = control_data[control_data[self.units_col] == unit]
+            ax.plot(
+                unit_data[self.times_col],
+                unit_data[self.outcome_col],
+                color=control_color,
+                alpha=control_alpha,
+                linewidth=1,
+            )
+
+        # Plot average control
+        avg_control = control_data.groupby(self.times_col)[self.outcome_col].mean()
+        ax.plot(
+            avg_control.index,
+            avg_control.values,
+            color=avg_control_color,
+            linestyle="--",
+            linewidth=2,
+            label="Avg Control",
+        )
+
+        # Plot treated unit(s) - average if multiple
+        treated_avg = treated_data.groupby(self.times_col)[self.outcome_col].mean()
+        ax.plot(
+            treated_avg.index,
+            treated_avg.values,
+            color=treated_color,
+            linewidth=3,
+            label="Treated",
+        )
+
+        # Add intervention line
+        ax.axvline(x=treatment_time, color="black", linestyle=":", label="Intervention")
+
+        # Formatting
+        plot_title = title if title is not None else "Raw Trends: Treated vs Controls"
+        ax.set_title(plot_title, fontsize=14)
+        ax.set_xlabel(self.times_col.capitalize(), fontsize=12)
+        ax.set_ylabel(self.outcome_col.capitalize(), fontsize=12)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        return fig
+
+    def plot_synthetic_control(
+        self,
+        treatment_time: int | float | str | None = None,
+        figsize: tuple[int, int] = (10, 6),
+        treated_color: str = "red",
+        synthetic_color: str = "blue",
+        title: str | None = None,
+    ) -> plt.Figure:
+        """
+        Plot the treated unit(s) against the SDID synthetic control.
+
+        This visualization shows how well the synthetic control (weighted
+        average of control units) matches the treated unit's trend before
+        intervention and the divergence after intervention.
+
+        Note: The model must be fitted before calling this method.
+
+        Args:
+            treatment_time: Time point of intervention. If None, uses the first
+                post-treatment period from the data.
+            figsize: Figure size as (width, height)
+            treated_color: Color for treated unit line
+            synthetic_color: Color for synthetic control line
+            title: Custom title for the plot. If None, uses default title.
+
+        Returns:
+            matplotlib Figure object
+
+        Raises:
+            ValueError: If the model has not been fitted yet.
+        """
+        if not self.is_fitted:
+            raise ValueError(
+                "Model must be fitted before plotting synthetic control. Call fit() first."
+            )
+
+        logger.info("Creating synthetic control plot...")
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # Determine treatment time
+        if treatment_time is None:
+            treatment_time = self.data[self.data[self.post_col]][self.times_col].min()
+
+        # Get pre-treatment periods
+        pre_periods = self.data[~self.data[self.post_col]][self.times_col].unique()
+
+        # Pivot control outcomes: time x units
+        control_wide = self.data[~self.data[self.treat_col]].pivot(
+            index=self.times_col, columns=self.units_col, values=self.outcome_col
+        )
+
+        # Get valid control units (those with non-zero weights)
+        valid_controls = self.unit_weights.index.intersection(control_wide.columns)
+
+        if len(valid_controls) == 0:
+            raise ValueError("No valid control units found with non-zero weights.")
+
+        # Calculate synthetic control outcome (weighted average)
+        synthetic_trend = control_wide[valid_controls].dot(self.unit_weights[valid_controls])
+
+        # Get treated unit outcome
+        treated_outcome = (
+            self.data[self.data[self.treat_col]]
+            .groupby(self.times_col)[self.outcome_col]
+            .mean()
+        )
+
+        # Adjust level (intercept) - SDID matches trends, not levels
+        # Align them in the pre-treatment period
+        common_pre = [p for p in pre_periods if p in treated_outcome.index and p in synthetic_trend.index]
+
+        if len(common_pre) == 0:
+            raise ValueError("No common pre-treatment periods for level adjustment.")
+
+        diff_mean = (
+            treated_outcome.loc[common_pre].mean() - synthetic_trend.loc[common_pre].mean()
+        )
+        synthetic_control = synthetic_trend + diff_mean
+
+        # Get max time for post-treatment shading
+        max_time = self.data[self.times_col].max()
+
+        # Plot
+        ax.plot(
+            treated_outcome.index,
+            treated_outcome.values,
+            color=treated_color,
+            linewidth=3,
+            label="Treated Unit (Actual)",
+        )
+
+        ax.plot(
+            synthetic_control.index,
+            synthetic_control.values,
+            color=synthetic_color,
+            linestyle="--",
+            linewidth=2,
+            label="Synthetic Control (SDID)",
+        )
+
+        # Add intervention line and post-treatment shading
+        ax.axvline(x=treatment_time, color="black", alpha=0.3)
+        ax.axvspan(treatment_time, max_time, color="gray", alpha=0.1, label="Post-Treatment")
+
+        # Formatting
+        plot_title = title if title is not None else "SDID Match: Treated vs Synthetic Control"
+        ax.set_title(plot_title, fontsize=14)
+        ax.set_xlabel(self.times_col.capitalize(), fontsize=12)
+        ax.set_ylabel(self.outcome_col.capitalize(), fontsize=12)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        return fig
+
     # =========================================================================
     # Utility Methods
     # =========================================================================
