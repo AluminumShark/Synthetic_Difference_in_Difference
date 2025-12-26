@@ -753,6 +753,790 @@ class TestIntegration:
         assert effects.name == "treatment_effect"
 
 
+class TestPlotMethods:
+    """Tests for visualization methods."""
+
+    @pytest.fixture(autouse=True)
+    def setup_matplotlib_backend(self):
+        """Use non-interactive backend for tests."""
+        import matplotlib
+        matplotlib.use("Agg")
+
+    def test_plot_raw_trends_returns_figure(self, larger_panel_data):
+        """Test that plot_raw_trends returns a matplotlib Figure."""
+        import matplotlib.pyplot as plt
+
+        sdid = SyntheticDiffInDiff(
+            data=larger_panel_data,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+
+        # plot_raw_trends can be called before fit
+        fig = sdid.plot_raw_trends()
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_raw_trends_with_custom_params(self, larger_panel_data):
+        """Test plot_raw_trends with custom parameters."""
+        import matplotlib.pyplot as plt
+
+        sdid = SyntheticDiffInDiff(
+            data=larger_panel_data,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+
+        fig = sdid.plot_raw_trends(
+            treatment_time=2018,
+            figsize=(12, 8),
+            control_color="blue",
+            control_alpha=0.5,
+            avg_control_color="green",
+            treated_color="orange",
+            title="Custom Title",
+        )
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_synthetic_control_requires_fit(self, larger_panel_data):
+        """Test that plot_synthetic_control raises error if not fitted."""
+        sdid = SyntheticDiffInDiff(
+            data=larger_panel_data,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+
+        with pytest.raises(ValueError, match="Model must be fitted"):
+            sdid.plot_synthetic_control()
+
+    def test_plot_synthetic_control_returns_figure(self, larger_panel_data):
+        """Test that plot_synthetic_control returns a matplotlib Figure after fit."""
+        import matplotlib.pyplot as plt
+
+        sdid = SyntheticDiffInDiff(
+            data=larger_panel_data,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+
+        sdid.fit()
+        fig = sdid.plot_synthetic_control()
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_synthetic_control_with_custom_params(self, larger_panel_data):
+        """Test plot_synthetic_control with custom parameters."""
+        import matplotlib.pyplot as plt
+
+        sdid = SyntheticDiffInDiff(
+            data=larger_panel_data,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+
+        sdid.fit()
+        fig = sdid.plot_synthetic_control(
+            treatment_time=2018,
+            figsize=(14, 7),
+            treated_color="orange",
+            synthetic_color="green",
+            title="Custom SDID Plot",
+        )
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+
+# =============================================================================
+# Extended Testing with Various Data Scenarios
+# =============================================================================
+
+
+class TestVariousDataScenarios:
+    """Tests with different data structures and edge cases."""
+
+    @pytest.fixture(autouse=True)
+    def setup_matplotlib_backend(self):
+        """Use non-interactive backend for tests."""
+        import matplotlib
+        matplotlib.use("Agg")
+
+    def generate_panel_data(
+        self,
+        n_control: int = 10,
+        n_treated: int = 1,
+        pre_periods: int = 5,
+        post_periods: int = 3,
+        treatment_effect: float = 10.0,
+        noise_level: float = 1.0,
+        trend_strength: float = 2.0,
+        seed: int = 42,
+    ) -> pd.DataFrame:
+        """Generate panel data with customizable parameters."""
+        np.random.seed(seed)
+
+        units = [f"control_{i}" for i in range(n_control)] + [
+            f"treated_{i}" for i in range(n_treated)
+        ]
+        times = list(range(2010, 2010 + pre_periods + post_periods))
+        treatment_start = 2010 + pre_periods
+
+        data = []
+        for unit in units:
+            is_treated = unit.startswith("treated")
+            base_value = 100 + np.random.randn() * 10
+
+            for t in times:
+                is_post = t >= treatment_start
+                time_effect = (t - 2010) * trend_strength
+                effect = treatment_effect if (is_treated and is_post) else 0
+                noise = np.random.randn() * noise_level
+
+                data.append({
+                    "unit": unit,
+                    "time": t,
+                    "outcome": base_value + time_effect + effect + noise,
+                    "treated": is_treated,
+                    "post": is_post,
+                })
+
+        return pd.DataFrame(data)
+
+    def test_single_treated_unit(self):
+        """Test with 1 treated unit and 10 controls."""
+        df = self.generate_panel_data(n_control=10, n_treated=1, treatment_effect=15)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+        # Effect should be somewhat close to true value (15)
+        assert 5 < effect < 25
+
+    def test_multiple_treated_units(self):
+        """Test with 5 treated units and 20 controls."""
+        df = self.generate_panel_data(n_control=20, n_treated=5, treatment_effect=20)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+        # Effect should be somewhat close to true value (20)
+        assert 10 < effect < 30
+
+    def test_many_control_units(self):
+        """Test with 50 control units."""
+        df = self.generate_panel_data(n_control=50, n_treated=1, treatment_effect=12)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+
+    def test_long_pre_period(self):
+        """Test with 15 pre-treatment periods."""
+        df = self.generate_panel_data(pre_periods=15, post_periods=3, treatment_effect=8)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+
+    def test_long_post_period(self):
+        """Test with 10 post-treatment periods."""
+        df = self.generate_panel_data(pre_periods=5, post_periods=10, treatment_effect=18)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+
+    def test_high_noise_data(self):
+        """Test with high noise level."""
+        df = self.generate_panel_data(noise_level=10.0, treatment_effect=20)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+
+    def test_low_noise_data(self):
+        """Test with very low noise level."""
+        df = self.generate_panel_data(noise_level=0.01, treatment_effect=10)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+
+    def test_zero_treatment_effect(self):
+        """Test when true treatment effect is zero."""
+        df = self.generate_panel_data(treatment_effect=0)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        # Effect should be close to zero (within noise range)
+        assert -5 < effect < 5
+
+    def test_negative_treatment_effect(self):
+        """Test with negative treatment effect."""
+        df = self.generate_panel_data(treatment_effect=-15)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert effect < 0
+
+    def test_large_treatment_effect(self):
+        """Test with very large treatment effect."""
+        df = self.generate_panel_data(treatment_effect=100)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        # Should capture large positive effect
+        assert effect > 30
+
+    def test_no_trend(self):
+        """Test with no time trend."""
+        df = self.generate_panel_data(trend_strength=0, treatment_effect=10)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+
+    def test_strong_trend(self):
+        """Test with strong time trend."""
+        df = self.generate_panel_data(trend_strength=10, treatment_effect=15)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+
+    def test_full_workflow_with_se_estimation(self):
+        """Test complete workflow including standard error."""
+        df = self.generate_panel_data(n_control=15, n_treated=3, treatment_effect=12)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        # Fit
+        effect = sdid.fit()
+        assert sdid.is_fitted
+        
+        # SE estimation
+        se = sdid.estimate_se(n_bootstrap=50, seed=42)
+        assert se > 0
+        assert not np.isnan(se)
+        
+        # Summary
+        summary = sdid.summary()
+        assert "Treatment Effect" in summary
+        assert "Standard Error" in summary
+
+    def test_all_plotting_methods(self):
+        """Test all plotting methods work together."""
+        import matplotlib.pyplot as plt
+        
+        df = self.generate_panel_data(n_control=10, n_treated=2, treatment_effect=15)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        # Raw trends before fit
+        fig1 = sdid.plot_raw_trends()
+        assert isinstance(fig1, plt.Figure)
+        plt.close(fig1)
+        
+        # Fit
+        sdid.fit()
+        
+        # Raw trends after fit
+        fig2 = sdid.plot_raw_trends(title="After Fit")
+        assert isinstance(fig2, plt.Figure)
+        plt.close(fig2)
+        
+        # Synthetic control
+        fig3 = sdid.plot_synthetic_control()
+        assert isinstance(fig3, plt.Figure)
+        plt.close(fig3)
+
+    def test_event_study_with_many_periods(self):
+        """Test event study with many time periods."""
+        df = self.generate_panel_data(pre_periods=5, post_periods=8, treatment_effect=10)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        # Use all post-treatment periods for event study
+        post_times = list(range(2015, 2023))
+        effects = sdid.run_event_study(post_times)
+        
+        assert len(effects) == len(post_times)
+        # At least some effects should be valid
+        valid_effects = effects.dropna()
+        assert len(valid_effects) > 0
+
+
+class TestDataTypeVariations:
+    """Tests with different data types and column configurations."""
+
+    def test_string_time_column(self):
+        """Test with string time values."""
+        np.random.seed(42)
+        
+        data = []
+        for unit in ["A", "B", "C", "D"]:
+            is_treated = unit == "D"
+            for t in ["2019-Q1", "2019-Q2", "2019-Q3", "2019-Q4", "2020-Q1", "2020-Q2"]:
+                is_post = t.startswith("2020")
+                effect = 10 if (is_treated and is_post) else 0
+                data.append({
+                    "unit": unit,
+                    "time": t,
+                    "outcome": 100 + np.random.randn() + effect,
+                    "treated": is_treated,
+                    "post": is_post,
+                })
+        
+        df = pd.DataFrame(data)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+
+    def test_integer_unit_ids(self):
+        """Test with integer unit IDs."""
+        np.random.seed(42)
+        
+        data = []
+        for unit in range(10):
+            is_treated = unit == 9
+            for t in range(6):
+                is_post = t >= 4
+                effect = 15 if (is_treated and is_post) else 0
+                data.append({
+                    "unit": unit,
+                    "time": t,
+                    "outcome": 50 + t * 2 + np.random.randn() + effect,
+                    "treated": is_treated,
+                    "post": is_post,
+                })
+        
+        df = pd.DataFrame(data)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+
+    def test_float_outcome(self):
+        """Test with float outcome values including decimals."""
+        np.random.seed(42)
+        
+        data = []
+        for unit in ["ctrl_1", "ctrl_2", "ctrl_3", "treat_1"]:
+            is_treated = unit.startswith("treat")
+            for t in range(8):
+                is_post = t >= 5
+                effect = 3.14159 if (is_treated and is_post) else 0
+                data.append({
+                    "unit": unit,
+                    "time": t,
+                    "outcome": 10.5 + t * 0.75 + np.random.randn() * 0.1 + effect,
+                    "treated": is_treated,
+                    "post": is_post,
+                })
+        
+        df = pd.DataFrame(data)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        # Should be close to 3.14159
+        assert 1 < effect < 6
+
+    def test_different_column_names(self):
+        """Test with non-standard column names."""
+        np.random.seed(42)
+        
+        data = []
+        for entity in ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]:
+            is_policy = entity == "Epsilon"
+            for period in [1, 2, 3, 4, 5, 6]:
+                after_policy = period > 4
+                effect = 20 if (is_policy and after_policy) else 0
+                data.append({
+                    "entity_id": entity,
+                    "time_period": period,
+                    "Y": 80 + period * 3 + np.random.randn() * 2 + effect,
+                    "policy_group": is_policy,
+                    "after_policy": after_policy,
+                })
+        
+        df = pd.DataFrame(data)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="Y",
+            times_col="time_period",
+            units_col="entity_id",
+            treat_col="policy_group",
+            post_col="after_policy",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+
+    def test_with_01_indicators(self):
+        """Test with 0/1 instead of True/False indicators."""
+        np.random.seed(42)
+        
+        data = []
+        for unit in range(8):
+            is_treated = 1 if unit >= 6 else 0
+            for t in range(6):
+                is_post = 1 if t >= 4 else 0
+                effect = 12 if (is_treated == 1 and is_post == 1) else 0
+                data.append({
+                    "unit": f"unit_{unit}",
+                    "time": t,
+                    "outcome": 100 + np.random.randn() * 2 + effect,
+                    "treated": is_treated,
+                    "post": is_post,
+                })
+        
+        df = pd.DataFrame(data)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+
+
+class TestStressTests:
+    """Stress tests for large datasets and edge cases."""
+
+    def test_large_dataset(self):
+        """Test with large dataset (100 units, 20 periods)."""
+        np.random.seed(42)
+        
+        n_control = 95
+        n_treated = 5
+        n_periods = 20
+        
+        data = []
+        for i in range(n_control + n_treated):
+            is_treated = i >= n_control
+            unit_effect = np.random.randn() * 10
+            
+            for t in range(n_periods):
+                is_post = t >= 15
+                treatment_effect = 25 if (is_treated and is_post) else 0
+                
+                data.append({
+                    "unit": f"unit_{i}",
+                    "time": t,
+                    "outcome": 100 + unit_effect + t * 2 + np.random.randn() + treatment_effect,
+                    "treated": is_treated,
+                    "post": is_post,
+                })
+        
+        df = pd.DataFrame(data)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+        assert not np.isnan(effect)
+        # Effect should be reasonably close to 25
+        assert 15 < effect < 35
+
+    def test_minimum_viable_dataset(self):
+        """Test with absolute minimum data (2 controls, 1 treated, 2+1 periods)."""
+        np.random.seed(42)
+        
+        data = [
+            # Control 1
+            {"unit": "C1", "time": 1, "outcome": 10, "treated": False, "post": False},
+            {"unit": "C1", "time": 2, "outcome": 12, "treated": False, "post": False},
+            {"unit": "C1", "time": 3, "outcome": 14, "treated": False, "post": True},
+            # Control 2
+            {"unit": "C2", "time": 1, "outcome": 11, "treated": False, "post": False},
+            {"unit": "C2", "time": 2, "outcome": 13, "treated": False, "post": False},
+            {"unit": "C2", "time": 3, "outcome": 15, "treated": False, "post": True},
+            # Treated
+            {"unit": "T1", "time": 1, "outcome": 10, "treated": True, "post": False},
+            {"unit": "T1", "time": 2, "outcome": 12, "treated": True, "post": False},
+            {"unit": "T1", "time": 3, "outcome": 24, "treated": True, "post": True},  # +10 effect
+        ]
+        
+        df = pd.DataFrame(data)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        effect = sdid.fit()
+        assert isinstance(effect, float)
+
+    def test_weights_summary_structure(self):
+        """Test that weight summaries have correct structure."""
+        np.random.seed(42)
+        
+        data = []
+        for i in range(12):
+            is_treated = i >= 10
+            for t in range(8):
+                is_post = t >= 5
+                effect = 10 if (is_treated and is_post) else 0
+                data.append({
+                    "unit": f"U{i}",
+                    "time": t,
+                    "outcome": 100 + np.random.randn() + effect,
+                    "treated": is_treated,
+                    "post": is_post,
+                })
+        
+        df = pd.DataFrame(data)
+        
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        
+        sdid.fit()
+        weights = sdid.get_weights_summary()
+        
+        assert "unit_weights" in weights
+        assert "time_weights" in weights
+        assert "weight" in weights["unit_weights"].columns
+        assert "rank" in weights["unit_weights"].columns
+
+    def test_multiple_runs_consistency(self):
+        """Test that multiple runs on same data give same results."""
+        np.random.seed(42)
+        
+        data = []
+        for i in range(10):
+            is_treated = i >= 8
+            for t in range(6):
+                is_post = t >= 4
+                effect = 15 if (is_treated and is_post) else 0
+                data.append({
+                    "unit": f"U{i}",
+                    "time": t,
+                    "outcome": 100 + t * 2 + np.random.randn() + effect,
+                    "treated": is_treated,
+                    "post": is_post,
+                })
+        
+        df = pd.DataFrame(data)
+        
+        # Run 1
+        sdid1 = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        effect1 = sdid1.fit()
+        
+        # Run 2
+        sdid2 = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        effect2 = sdid2.fit()
+        
+        # Should be identical
+        assert effect1 == effect2
+
+
 # =============================================================================
 # Run tests
 # =============================================================================
