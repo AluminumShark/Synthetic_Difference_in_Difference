@@ -303,8 +303,7 @@ class SyntheticDiffInDiff:
 
         # Objective: minimize squared error with intercept + regularization on weights
         objective = cp.Minimize(
-            cp.sum_squares(Y @ weights + intercept - y)
-            + regularization * cp.sum_squares(weights)
+            cp.sum_squares(Y @ weights + intercept - y) + regularization * cp.sum_squares(weights)
         )
 
         problem = cp.Problem(objective)
@@ -373,8 +372,7 @@ class SyntheticDiffInDiff:
         diff = treated_avg - control_avg
         # Minimize: (λ'·diff + intercept)² + regularization·||λ||²
         objective = cp.Minimize(
-            cp.sum_squares(weights.T @ diff + intercept)
-            + regularization * cp.sum_squares(weights)
+            cp.sum_squares(weights.T @ diff + intercept) + regularization * cp.sum_squares(weights)
         )
 
         problem = cp.Problem(objective)
@@ -457,10 +455,7 @@ class SyntheticDiffInDiff:
 
         # Two-way fixed effects regression (unit + time FE)
         # C() indicates categorical/factor variables for fixed effects
-        formula = (
-            f"{self.outcome_col} ~ treat_post + "
-            f"C({self.units_col}) + C({self.times_col})"
-        )
+        formula = f"{self.outcome_col} ~ treat_post + C({self.units_col}) + C({self.times_col})"
 
         try:
             model = smf.wls(formula, data=df, weights=df["combined_weight"])
@@ -883,21 +878,21 @@ class SyntheticDiffInDiff:
 
         # Get treated unit outcome
         treated_outcome = (
-            self.data[self.data[self.treat_col]]
-            .groupby(self.times_col)[self.outcome_col]
-            .mean()
+            self.data[self.data[self.treat_col]].groupby(self.times_col)[self.outcome_col].mean()
         )
 
         # Adjust level (intercept) - SDID matches trends, not levels
         # Align them in the pre-treatment period
-        common_pre = [p for p in pre_periods if p in treated_outcome.index and p in synthetic_trend.index]
+        common_pre = [
+            p for p in pre_periods if p in treated_outcome.index and p in synthetic_trend.index
+        ]
 
         if len(common_pre) == 0:
             raise ValueError("No common pre-treatment periods for level adjustment.")
 
-        diff_mean = (
-            treated_outcome.loc[common_pre].mean() - synthetic_trend.loc[common_pre].mean()
-        )
+        treated_pre_mean = treated_outcome.loc[common_pre].mean()
+        synthetic_pre_mean = synthetic_trend.loc[common_pre].mean()
+        diff_mean = treated_pre_mean - synthetic_pre_mean
         synthetic_control = synthetic_trend + diff_mean
 
         # Get max time for post-treatment shading
@@ -1000,9 +995,7 @@ class SyntheticDiffInDiff:
             ci_lower = self.treatment_effect - z * self.standard_error
             ci_upper = self.treatment_effect + z * self.standard_error
             ci_pct = int(confidence_level * 100)
-            lines.append(
-                f"{ci_pct}% Confidence Interval: [{ci_lower:.4f}, {ci_upper:.4f}]"
-            )
+            lines.append(f"{ci_pct}% Confidence Interval: [{ci_lower:.4f}, {ci_upper:.4f}]")
 
             t_stat = self.treatment_effect / self.standard_error
             p_value = 2 * (1 - stats.norm.cdf(abs(t_stat)))

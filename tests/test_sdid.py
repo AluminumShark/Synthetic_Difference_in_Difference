@@ -919,13 +919,15 @@ class TestVariousDataScenarios:
                 effect = treatment_effect if (is_treated and is_post) else 0
                 noise = np.random.randn() * noise_level
 
-                data.append({
-                    "unit": unit,
-                    "time": t,
-                    "outcome": base_value + time_effect + effect + noise,
-                    "treated": is_treated,
-                    "post": is_post,
-                })
+                data.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "outcome": base_value + time_effect + effect + noise,
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
 
         return pd.DataFrame(data)
 
@@ -1155,7 +1157,7 @@ class TestVariousDataScenarios:
         # Fit
         sdid.fit()
         assert sdid.is_fitted
-        
+
         # SE estimation
         se = sdid.estimate_se(n_bootstrap=50, seed=42)
         assert se > 0
@@ -1233,13 +1235,15 @@ class TestDataTypeVariations:
             for t in ["2019-Q1", "2019-Q2", "2019-Q3", "2019-Q4", "2020-Q1", "2020-Q2"]:
                 is_post = t.startswith("2020")
                 effect = 10 if (is_treated and is_post) else 0
-                data.append({
-                    "unit": unit,
-                    "time": t,
-                    "outcome": 100 + np.random.randn() + effect,
-                    "treated": is_treated,
-                    "post": is_post,
-                })
+                data.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "outcome": 100 + np.random.randn() + effect,
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1265,13 +1269,15 @@ class TestDataTypeVariations:
             for t in range(6):
                 is_post = t >= 4
                 effect = 15 if (is_treated and is_post) else 0
-                data.append({
-                    "unit": unit,
-                    "time": t,
-                    "outcome": 50 + t * 2 + np.random.randn() + effect,
-                    "treated": is_treated,
-                    "post": is_post,
-                })
+                data.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "outcome": 50 + t * 2 + np.random.randn() + effect,
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1297,13 +1303,15 @@ class TestDataTypeVariations:
             for t in range(8):
                 is_post = t >= 5
                 effect = 3.14159 if (is_treated and is_post) else 0
-                data.append({
-                    "unit": unit,
-                    "time": t,
-                    "outcome": 10.5 + t * 0.75 + np.random.randn() * 0.1 + effect,
-                    "treated": is_treated,
-                    "post": is_post,
-                })
+                data.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "outcome": 10.5 + t * 0.75 + np.random.randn() * 0.1 + effect,
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1331,13 +1339,15 @@ class TestDataTypeVariations:
             for period in [1, 2, 3, 4, 5, 6]:
                 after_policy = period > 4
                 effect = 20 if (is_policy and after_policy) else 0
-                data.append({
-                    "entity_id": entity,
-                    "time_period": period,
-                    "Y": 80 + period * 3 + np.random.randn() * 2 + effect,
-                    "policy_group": is_policy,
-                    "after_policy": after_policy,
-                })
+                data.append(
+                    {
+                        "entity_id": entity,
+                        "time_period": period,
+                        "Y": 80 + period * 3 + np.random.randn() * 2 + effect,
+                        "policy_group": is_policy,
+                        "after_policy": after_policy,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1363,13 +1373,15 @@ class TestDataTypeVariations:
             for t in range(6):
                 is_post = 1 if t >= 4 else 0
                 effect = 12 if (is_treated == 1 and is_post == 1) else 0
-                data.append({
-                    "unit": f"unit_{unit}",
-                    "time": t,
-                    "outcome": 100 + np.random.randn() * 2 + effect,
-                    "treated": is_treated,
-                    "post": is_post,
-                })
+                data.append(
+                    {
+                        "unit": f"unit_{unit}",
+                        "time": t,
+                        "outcome": 100 + np.random.randn() * 2 + effect,
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1406,13 +1418,15 @@ class TestStressTests:
                 is_post = t >= 15
                 treatment_effect = 25 if (is_treated and is_post) else 0
 
-                data.append({
-                    "unit": f"unit_{i}",
-                    "time": t,
-                    "outcome": 100 + unit_effect + t * 2 + np.random.randn() + treatment_effect,
-                    "treated": is_treated,
-                    "post": is_post,
-                })
+                data.append(
+                    {
+                        "unit": f"unit_{i}",
+                        "time": t,
+                        "outcome": 100 + unit_effect + t * 2 + np.random.randn() + treatment_effect,
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1474,13 +1488,15 @@ class TestStressTests:
             for t in range(8):
                 is_post = t >= 5
                 effect = 10 if (is_treated and is_post) else 0
-                data.append({
-                    "unit": f"U{i}",
-                    "time": t,
-                    "outcome": 100 + np.random.randn() + effect,
-                    "treated": is_treated,
-                    "post": is_post,
-                })
+                data.append(
+                    {
+                        "unit": f"U{i}",
+                        "time": t,
+                        "outcome": 100 + np.random.randn() + effect,
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
@@ -1511,13 +1527,15 @@ class TestStressTests:
             for t in range(6):
                 is_post = t >= 4
                 effect = 15 if (is_treated and is_post) else 0
-                data.append({
-                    "unit": f"U{i}",
-                    "time": t,
-                    "outcome": 100 + t * 2 + np.random.randn() + effect,
-                    "treated": is_treated,
-                    "post": is_post,
-                })
+                data.append(
+                    {
+                        "unit": f"U{i}",
+                        "time": t,
+                        "outcome": 100 + t * 2 + np.random.randn() + effect,
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
 
         df = pd.DataFrame(data)
 
