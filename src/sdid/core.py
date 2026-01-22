@@ -164,7 +164,7 @@ class SyntheticDiffInDiff:
     # Core Estimation Methods
     # =========================================================================
 
-    def fit(self, verbose: bool = False) -> float:
+    def fit(self, verbose: bool = False) -> float | None:
         """
         Fit the SDID model and estimate the treatment effect.
 
@@ -316,7 +316,9 @@ class SyntheticDiffInDiff:
 
             weight_series = pd.Series(weights.value, index=control_matrix.columns, name="weight")
             self.unit_weights = weight_series[weight_series > self.WEIGHT_THRESHOLD]
-            self._unit_intercept = float(intercept.value[0])
+            intercept_value = intercept.value
+            if intercept_value is not None:
+                self._unit_intercept = float(intercept_value[0])
 
             logger.info(
                 f"Unit weights estimated: {len(self.unit_weights)} units with non-zero weights"
@@ -385,7 +387,9 @@ class SyntheticDiffInDiff:
 
             weight_series = pd.Series(weights.value, index=common_times, name="time_weight")
             self.time_weights = weight_series[weight_series > self.WEIGHT_THRESHOLD]
-            self._time_intercept = float(intercept.value[0])
+            intercept_value = intercept.value
+            if intercept_value is not None:
+                self._time_intercept = float(intercept_value[0])
 
             logger.info(
                 f"Time weights estimated: {len(self.time_weights)} periods with non-zero weights"
@@ -554,7 +558,7 @@ class SyntheticDiffInDiff:
         units_col: str,
         treat_col: str,
         post_col: str,
-    ) -> float:
+    ) -> float | None:
         """Run SDID on placebo data and return estimated effect."""
         try:
             sdid = SyntheticDiffInDiff(
@@ -730,7 +734,7 @@ class SyntheticDiffInDiff:
 
     def plot_raw_trends(
         self,
-        treatment_time: int | float | str | None = None,
+        treatment_time: int | float | None = None,
         figsize: tuple[int, int] = (10, 6),
         control_color: str = "lightgray",
         control_alpha: float = 0.3,
@@ -762,8 +766,11 @@ class SyntheticDiffInDiff:
         fig, ax = plt.subplots(figsize=figsize)
 
         # Determine treatment time
+        plot_treatment_time: int | float
         if treatment_time is None:
-            treatment_time = self.data[self.data[self.post_col]][self.times_col].min()
+            plot_treatment_time = float(self.data[self.data[self.post_col]][self.times_col].min())
+        else:
+            plot_treatment_time = treatment_time
 
         # Get control and treated data
         control_data = self.data[~self.data[self.treat_col]]
@@ -802,7 +809,7 @@ class SyntheticDiffInDiff:
         )
 
         # Add intervention line
-        ax.axvline(x=treatment_time, color="black", linestyle=":", label="Intervention")
+        ax.axvline(x=plot_treatment_time, color="black", linestyle=":", label="Intervention")
 
         # Formatting
         plot_title = title if title is not None else "Raw Trends: Treated vs Controls"
@@ -817,7 +824,7 @@ class SyntheticDiffInDiff:
 
     def plot_synthetic_control(
         self,
-        treatment_time: int | float | str | None = None,
+        treatment_time: int | float | None = None,
         figsize: tuple[int, int] = (10, 6),
         treated_color: str = "red",
         synthetic_color: str = "blue",
@@ -853,11 +860,17 @@ class SyntheticDiffInDiff:
 
         logger.info("Creating synthetic control plot...")
 
+        if self.unit_weights is None:
+            raise ValueError("Unit weights not estimated. Call fit() first.")
+
         fig, ax = plt.subplots(figsize=figsize)
 
         # Determine treatment time
+        plot_treatment_time: int | float
         if treatment_time is None:
-            treatment_time = self.data[self.data[self.post_col]][self.times_col].min()
+            plot_treatment_time = float(self.data[self.data[self.post_col]][self.times_col].min())
+        else:
+            plot_treatment_time = treatment_time
 
         # Get pre-treatment periods
         pre_periods = self.data[~self.data[self.post_col]][self.times_col].unique()
@@ -917,8 +930,9 @@ class SyntheticDiffInDiff:
         )
 
         # Add intervention line and post-treatment shading
-        ax.axvline(x=treatment_time, color="black", alpha=0.3)
-        ax.axvspan(treatment_time, max_time, color="gray", alpha=0.1, label="Post-Treatment")
+        plot_max_time = float(max_time)
+        ax.axvline(x=plot_treatment_time, color="black", alpha=0.3)
+        ax.axvspan(plot_treatment_time, plot_max_time, color="gray", alpha=0.1, label="Post-Treatment")
 
         # Formatting
         plot_title = title if title is not None else "SDID Match: Treated vs Synthetic Control"
@@ -987,7 +1001,7 @@ class SyntheticDiffInDiff:
             f"Treatment Effect (ATT): {self.treatment_effect:.4f}",
         ]
 
-        if self.standard_error is not None:
+        if self.standard_error is not None and self.treatment_effect is not None:
             lines.append(f"Standard Error:        {self.standard_error:.4f}")
 
             # Calculate confidence interval

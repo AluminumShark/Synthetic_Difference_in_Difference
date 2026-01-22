@@ -319,6 +319,7 @@ class TestFit:
 
         # Effect should be positive and roughly in the right ballpark
         # With noise, we allow a wide range
+        assert effect is not None
         assert effect > 0
         assert effect < 30  # Should not be wildly off
 
@@ -338,6 +339,7 @@ class TestFit:
 
         # With more data, estimate should be in positive direction
         # Allow wider range due to noise and regularization
+        assert effect is not None
         assert 0 < effect < 30
 
     def test_weights_populated_after_fit(self, simple_panel_data):
@@ -376,6 +378,7 @@ class TestFit:
         )
         sdid.fit()
 
+        assert sdid.unit_weights is not None
         assert (sdid.unit_weights >= 0).all()
 
     def test_time_weights_are_nonnegative(self, simple_panel_data):
@@ -390,6 +393,7 @@ class TestFit:
         )
         sdid.fit()
 
+        assert sdid.time_weights is not None
         assert (sdid.time_weights >= 0).all()
 
 
@@ -1213,7 +1217,7 @@ class TestVariousDataScenarios:
         )
 
         # Use all post-treatment periods for event study
-        post_times = list(range(2015, 2023))
+        post_times: list[int | float | str] = list(range(2015, 2023))
         effects = sdid.run_event_study(post_times)
 
         assert len(effects) == len(post_times)
