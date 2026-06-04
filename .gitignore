@@ -24,6 +24,10 @@ wheels/
 *.whl
 *.tar.gz
 
+# Secrets / environment
+.env
+.env.*
+
 # Virtual environments
 .venv/
 venv/
