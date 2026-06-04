@@ -31,9 +31,9 @@ SDID estimates the Average Treatment Effect on the Treated (ATT) through a weigh
 
 We find optimal unit weights $\hat{\omega}$ by solving:
 
-$$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T_{pre}} \left( \sum_{i \in \mathcal{C}} \omega_i Y_{it} + \alpha - \bar{Y}_{treated,t} \right)^2 + \zeta_{unit} \|\omega\|_2^2$$
+$$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T_{pre}} \left( \sum_{i \in \mathcal{C}} \omega_i Y_{it} + \alpha - \bar{Y}_{treated,t} \right)^2 + \zeta_{unit}^2 \|\omega\|_2^2$$
 
-subject to $\omega_i \geq 0$ for all $i \in \mathcal{C}$
+subject to $\omega_i \geq 0$ and $\sum_{i \in \mathcal{C}} \omega_i = 1$
 
 where:
 - $\mathcal{C}$ is the set of control units
@@ -43,13 +43,11 @@ where:
 
 #### Time Weights Optimization
 
-Similarly, we estimate time weights $\hat{\lambda}$:
+Time weights $\hat{\lambda}$ are chosen so that, for the **control** units, a weighted average of pre-treatment outcomes predicts their average post-treatment outcome:
 
-$$\hat{\lambda}, \hat{\beta} = \underset{\lambda, \beta}{\arg\min} \left( \sum_{t=1}^{T_{pre}} \lambda_t \Delta_t + \beta \right)^2 + \zeta_{time} \|\lambda\|_2^2$$
+$$\hat{\lambda}, \hat{\beta} = \underset{\lambda, \beta}{\arg\min} \sum_{i \in \mathcal{C}} \left( \beta + \sum_{t=1}^{T_{pre}} \lambda_t Y_{it} - \frac{1}{T_{post}} \sum_{t > T_0} Y_{it} \right)^2 + \zeta_{time} \|\lambda\|_2^2$$
 
-subject to $\lambda_t \geq 0$
-
-where $\Delta_t = \bar{Y}_{treated,t} - \bar{Y}_{control,t}$
+subject to $\lambda_t \geq 0$ and $\sum_{t=1}^{T_{pre}} \lambda_t = 1$
 
 #### Treatment Effect Estimation
 
@@ -285,9 +283,9 @@ SDID 透過加權雙向固定效應迴歸估計處理組的平均處理效果 (A
 
 我們通過求解以下問題找到最佳單位權重 $\hat{\omega}$：
 
-$$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T_{pre}} \left( \sum_{i \in \mathcal{C}} \omega_i Y_{it} + \alpha - \bar{Y}_{treated,t} \right)^2 + \zeta_{unit} \|\omega\|_2^2$$
+$$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T_{pre}} \left( \sum_{i \in \mathcal{C}} \omega_i Y_{it} + \alpha - \bar{Y}_{treated,t} \right)^2 + \zeta_{unit}^2 \|\omega\|_2^2$$
 
-限制條件：$\omega_i \geq 0$（對所有控制單位 $i \in \mathcal{C}$）
+限制條件：$\omega_i \geq 0$ 且 $\sum_{i \in \mathcal{C}} \omega_i = 1$
 
 其中：
 - $\mathcal{C}$ 為控制單位集合
@@ -297,13 +295,11 @@ $$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T
 
 #### 時間權重優化
 
-類似地，我們估計時間權重 $\hat{\lambda}$：
+時間權重 $\hat{\lambda}$ 的選取，是讓**控制單位**的處理前結果加權平均能預測其處理後的平均結果：
 
-$$\hat{\lambda}, \hat{\beta} = \underset{\lambda, \beta}{\arg\min} \left( \sum_{t=1}^{T_{pre}} \lambda_t \Delta_t + \beta \right)^2 + \zeta_{time} \|\lambda\|_2^2$$
+$$\hat{\lambda}, \hat{\beta} = \underset{\lambda, \beta}{\arg\min} \sum_{i \in \mathcal{C}} \left( \beta + \sum_{t=1}^{T_{pre}} \lambda_t Y_{it} - \frac{1}{T_{post}} \sum_{t > T_0} Y_{it} \right)^2 + \zeta_{time} \|\lambda\|_2^2$$
 
-限制條件：$\lambda_t \geq 0$
-
-其中 $\Delta_t = \bar{Y}_{treated,t} - \bar{Y}_{control,t}$
+限制條件：$\lambda_t \geq 0$ 且 $\sum_{t=1}^{T_{pre}} \lambda_t = 1$
 
 #### 處理效果估計
 
