@@ -856,6 +856,26 @@ class TestPlotMethods:
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
+    def test_plot_event_study_returns_figure(self, larger_panel_data):
+        """Test that plot_event_study returns a matplotlib Figure with CIs."""
+        sdid = SyntheticDiffInDiff(
+            data=larger_panel_data,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+
+        fig = sdid.plot_event_study(
+            times=[2018, 2019, 2020, 2021],
+            n_bootstrap=15,
+            seed=42,
+            confidence_level=0.90,
+        )
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
     def test_plot_synthetic_control_with_custom_params(self, larger_panel_data):
         """Test plot_synthetic_control with custom parameters."""
         sdid = SyntheticDiffInDiff(
@@ -1567,6 +1587,113 @@ class TestStressTests:
 
         # Should be identical
         assert effect1 == effect2
+
+
+# =============================================================================
+# SDID Correctness / Methodology Tests
+# =============================================================================
+
+
+class TestSDIDCorrectness:
+    """
+    Tests that lock in the corrected SDID methodology.
+
+    These guard against the previous bug where the time-weight optimization was
+    degenerate (collapsing to zero), which silently dropped all pre-treatment
+    observations from the final regression.
+    """
+
+    @staticmethod
+    def _clean_panel(
+        n_control: int = 6,
+        pre_periods: int = 5,
+        post_periods: int = 3,
+        effect: float = 10.0,
+    ) -> pd.DataFrame:
+        """Noiseless panel with parallel trends and a known treatment effect."""
+        units = [f"control_{i}" for i in range(n_control)] + ["treated_0"]
+        times = list(range(2000, 2000 + pre_periods + post_periods))
+        treatment_start = 2000 + pre_periods
+
+        rows = []
+        for idx, unit in enumerate(units):
+            is_treated = unit.startswith("treated")
+            base = 100 + idx * 7  # distinct levels, identical (parallel) trends
+            for t in times:
+                is_post = t >= treatment_start
+                value = base + (t - 2000) * 3
+                if is_treated and is_post:
+                    value += effect
+                rows.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "outcome": float(value),
+                        "treated": is_treated,
+                        "post": is_post,
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def _fit(self, df: pd.DataFrame) -> SyntheticDiffInDiff:
+        sdid = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="outcome",
+            times_col="time",
+            units_col="unit",
+            treat_col="treated",
+            post_col="post",
+        )
+        sdid.fit()
+        return sdid
+
+    def test_time_weights_are_non_empty(self):
+        """Time weights must be populated (regression guard for the old bug)."""
+        sdid = self._fit(self._clean_panel())
+        assert sdid.time_weights is not None
+        assert len(sdid.time_weights) > 0
+
+    def test_time_weights_sum_to_one(self):
+        """Time weights live on the simplex and should sum to ~1."""
+        sdid = self._fit(self._clean_panel())
+        assert sdid.time_weights.sum() == pytest.approx(1.0, abs=1e-2)
+
+    def test_unit_weights_sum_to_one(self):
+        """Unit weights live on the simplex and should sum to ~1."""
+        sdid = self._fit(self._clean_panel())
+        assert sdid.unit_weights.sum() == pytest.approx(1.0, abs=1e-2)
+
+    def test_noiseless_effect_is_accurate(self):
+        """With parallel trends and no noise, the ATT is recovered precisely."""
+        sdid = self._fit(self._clean_panel(effect=10.0))
+        assert sdid.treatment_effect == pytest.approx(10.0, abs=0.5)
+
+    def test_pre_periods_retained_in_regression(self):
+        """The weighted regression must use both pre- and post-treatment data."""
+        sdid = self._fit(self._clean_panel())
+        assert sdid.merged_data is not None
+        used = sdid.merged_data[sdid.merged_data["combined_weight"] > 0]
+        assert (~used["post"]).any(), "pre-treatment observations were dropped"
+        assert (used["post"]).any(), "post-treatment observations were dropped"
+
+    def test_placebo_excludes_real_treated_unit(self):
+        """Placebo datasets must not contain the real treated unit."""
+        df = self._clean_panel()
+        sdid = self._fit(df)
+        rng = np.random.default_rng(0)
+        placebo = sdid._create_placebo_data(rng)
+        assert "treated_0" not in placebo["unit"].unique()
+        # Exactly one real treated unit -> exactly one placebo-treated unit.
+        assert placebo[placebo["treated"]]["unit"].nunique() == 1
+
+    def test_estimate_se_does_not_touch_global_rng(self):
+        """estimate_se must not mutate the global NumPy RNG state."""
+        sdid = self._fit(self._clean_panel())
+        np.random.seed(12345)
+        before = np.random.get_state()[1].copy()
+        sdid.estimate_se(n_bootstrap=15, seed=7)
+        after = np.random.get_state()[1]
+        assert np.array_equal(before, after)
 
 
 # =============================================================================
