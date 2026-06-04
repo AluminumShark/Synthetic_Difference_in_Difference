@@ -21,9 +21,11 @@ import statsmodels.formula.api as smf
 from joblib import Parallel, delayed
 from scipy import stats
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Library logging: attach a NullHandler so importing this package does not
+# mutate the root logger configuration of the host application. Consumers can
+# enable output by configuring their own handlers / levels for this logger.
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 class SyntheticDiffInDiff:
@@ -190,24 +192,26 @@ class SyntheticDiffInDiff:
 
         return self.treatment_effect
 
-    def _calculate_unit_regularization(self, multiplier: float = 1.0) -> float:
+    def _calculate_unit_regularization(self) -> float:
         """
         Calculate regularization parameter (zeta) for unit weights.
 
-        The regularization prevents overfitting by penalizing extreme weights.
-        Formula from Arkhangelsky et al. (2021).
+        Following Arkhangelsky et al. (2021):
 
-        Args:
-            multiplier: Scaling factor for regularization strength
+            zeta = (N_treated_post)^(1/4) * sigma
+
+        where ``sigma`` is the standard deviation of the first differences of
+        control-unit outcomes in the pre-treatment period. The squared value is
+        applied as the ridge penalty in the weight optimization.
 
         Returns:
-            Regularization parameter value
+            Regularization parameter value (zeta)
         """
         # Count treated observations in post-treatment period
-        n_treated_post = self.data.query(f"({self.post_col}) & ({self.treat_col})").shape[0]
+        n_treated_post = self.data[self.data[self.post_col] & self.data[self.treat_col]].shape[0]
 
         # Estimate noise from control units in pre-treatment period
-        control_pre = self.data.query(f"(~{self.post_col}) & (~{self.treat_col})")
+        control_pre = self.data[(~self.data[self.post_col]) & (~self.data[self.treat_col])]
 
         if control_pre.empty:
             raise ValueError("No pre-treatment control data available for regularization.")
@@ -227,7 +231,7 @@ class SyntheticDiffInDiff:
             )
             noise_level = self.DEFAULT_NOISE_LEVEL
 
-        return multiplier * (n_treated_post**0.25) * noise_level
+        return (n_treated_post**0.25) * noise_level
 
     def _calculate_time_regularization(self) -> float:
         """
@@ -261,8 +265,8 @@ class SyntheticDiffInDiff:
         """
         logger.info("Estimating unit weights...")
 
-        regularization = self._calculate_unit_regularization()
-        logger.info(f"Unit regularization: {regularization:.4f}")
+        zeta = self._calculate_unit_regularization()
+        logger.info(f"Unit regularization: {zeta:.4f}")
 
         # Get pre-treatment data
         pre_data = self.data[~self.data[self.post_col]]
@@ -291,9 +295,10 @@ class SyntheticDiffInDiff:
         control_matrix = control_matrix.loc[common_times]
         treated_avg = treated_avg.loc[common_times]
 
-        # Set up optimization problem with intercept
+        # Set up optimization problem with intercept on the unit simplex.
         # The intercept allows for level differences between treated and controls
-        # (SDID learns trends, not absolute levels)
+        # (SDID learns trends, not absolute levels), while the simplex constraint
+        # (weights >= 0, sum to 1) follows Arkhangelsky et al. (2021).
         n_units = control_matrix.shape[1]
         weights = cp.Variable(n_units, nonneg=True)
         intercept = cp.Variable(1)  # Can be positive or negative
@@ -301,12 +306,13 @@ class SyntheticDiffInDiff:
         Y = control_matrix.values
         y = treated_avg.values
 
-        # Objective: minimize squared error with intercept + regularization on weights
+        # Objective: minimize squared error with intercept + ridge penalty (zeta^2)
         objective = cp.Minimize(
-            cp.sum_squares(Y @ weights + intercept - y) + regularization * cp.sum_squares(weights)
+            cp.sum_squares(Y @ weights + intercept - y) + (zeta**2) * cp.sum_squares(weights)
         )
+        constraints = [cp.sum(weights) == 1]
 
-        problem = cp.Problem(objective)
+        problem = cp.Problem(objective, constraints)
 
         try:
             problem.solve(verbose=verbose)
@@ -332,52 +338,56 @@ class SyntheticDiffInDiff:
         """
         Estimate optimal weights for time periods.
 
-        Solves an optimization problem to find time weights that balance
-        pre-treatment comparisons between treated and control groups.
-        Includes an intercept term to account for level differences.
+        Following Arkhangelsky et al. (2021), time weights are chosen so that,
+        for the *control* units, a weighted average of pre-treatment outcomes
+        predicts their average post-treatment outcome. An intercept absorbs
+        level differences and the weights are constrained to the unit simplex
+        (non-negative and summing to one).
         """
         logger.info("Estimating time weights...")
 
-        regularization = self._calculate_time_regularization()
-        logger.info(f"Time regularization: {regularization:.4f}")
+        zeta = self._calculate_time_regularization()
+        logger.info(f"Time regularization: {zeta:.4f}")
 
-        pre_data = self.data[~self.data[self.post_col]]
+        control_data = self.data[~self.data[self.treat_col]]
+        pre_control = control_data[~control_data[self.post_col]]
+        post_control = control_data[control_data[self.post_col]]
 
-        # Pivot: units x time
-        treated_matrix = pre_data[pre_data[self.treat_col]].pivot(
+        if pre_control.empty or post_control.empty:
+            raise ValueError("Insufficient control data for time weight estimation.")
+
+        # Pre-treatment outcomes (control units x pre-periods)
+        pre_matrix = pre_control.pivot(
             index=self.units_col, columns=self.times_col, values=self.outcome_col
         )
-        control_matrix = pre_data[~pre_data[self.treat_col]].pivot(
-            index=self.units_col, columns=self.times_col, values=self.outcome_col
-        )
+        # Average post-treatment outcome per control unit
+        post_avg = post_control.groupby(self.units_col)[self.outcome_col].mean()
 
-        if treated_matrix.empty or control_matrix.empty:
-            raise ValueError("Insufficient data for time weight estimation.")
+        # Align control units present in both pre- and post-treatment periods
+        common_units = pre_matrix.index.intersection(post_avg.index)
+        if len(common_units) == 0:
+            raise ValueError("No control units with both pre- and post-treatment data.")
 
-        common_times = treated_matrix.columns.intersection(control_matrix.columns)
-        if len(common_times) == 0:
-            raise ValueError("No common time periods for time weight estimation.")
+        pre_matrix = pre_matrix.loc[common_units]
+        post_avg = post_avg.loc[common_units]
 
-        treated_matrix = treated_matrix[common_times]
-        control_matrix = control_matrix[common_times]
+        pre_times = pre_matrix.columns
+        n_periods = len(pre_times)
 
-        # Time averages (difference between treated and control at each time)
-        treated_avg = treated_matrix.mean(axis=0).values
-        control_avg = control_matrix.mean(axis=0).values
-
-        # Optimization with intercept
-        # Goal: find weights λ such that weighted pre-period difference predicts post-period
-        n_periods = len(common_times)
+        # Optimization: weighted pre-period outcomes predict the post-period
+        # average, on the time simplex with an intercept for level adjustment.
         weights = cp.Variable(n_periods, nonneg=True)
-        intercept = cp.Variable(1)  # Intercept for level adjustment
+        intercept = cp.Variable(1)
 
-        diff = treated_avg - control_avg
-        # Minimize: (λ'·diff + intercept)² + regularization·||λ||²
+        X = pre_matrix.values
+        y = post_avg.values
+
         objective = cp.Minimize(
-            cp.sum_squares(weights.T @ diff + intercept) + regularization * cp.sum_squares(weights)
+            cp.sum_squares(X @ weights + intercept - y) + zeta * cp.sum_squares(weights)
         )
+        constraints = [cp.sum(weights) == 1]
 
-        problem = cp.Problem(objective)
+        problem = cp.Problem(objective, constraints)
 
         try:
             problem.solve(verbose=verbose)
@@ -385,7 +395,7 @@ class SyntheticDiffInDiff:
             if problem.status in ["infeasible", "unbounded"]:
                 raise ValueError(f"Optimization failed: {problem.status}")
 
-            weight_series = pd.Series(weights.value, index=common_times, name="time_weight")
+            weight_series = pd.Series(weights.value, index=pre_times, name="time_weight")
             self.time_weights = weight_series[weight_series > self.WEIGHT_THRESHOLD]
             intercept_value = intercept.value
             if intercept_value is not None:
@@ -408,24 +418,30 @@ class SyntheticDiffInDiff:
 
         df = self.data.copy()
 
+        # Counts used to balance the treated/post mass against the synthetic
+        # control / pre-period mass (Arkhangelsky et al., 2021 regression form).
+        n_treated_units = df[df[self.treat_col]][self.units_col].nunique()
+        n_post_periods = df[df[self.post_col]][self.times_col].nunique()
+
         # Initialize weight columns
         df["unit_weight"] = 0.0
         df["time_weight"] = 0.0
 
-        # Assign unit weights (control units only; treated units get weight 1)
+        # Assign unit weights: control units get estimated omega (sum to 1),
+        # treated units share uniform weight 1 / N_treated.
         control_mask = ~df[self.treat_col]
         for unit, weight in self.unit_weights.items():
             mask = control_mask & (df[self.units_col] == unit)
             df.loc[mask, "unit_weight"] = weight
 
-        df.loc[~control_mask, "unit_weight"] = 1.0
+        df.loc[~control_mask, "unit_weight"] = 1.0 / n_treated_units
 
-        # Assign time weights (pre-treatment periods get estimated weights)
+        # Assign time weights: pre-treatment periods get estimated lambda
+        # (sum to 1), post-treatment periods share uniform weight 1 / T_post.
         for period, weight in self.time_weights.items():
             df.loc[df[self.times_col] == period, "time_weight"] = weight
 
-        # Post-treatment periods get uniform weight of 1
-        df.loc[df[self.post_col], "time_weight"] = 1.0
+        df.loc[df[self.post_col], "time_weight"] = 1.0 / n_post_periods
 
         # Combined weight
         df["combined_weight"] = df["unit_weight"] * df["time_weight"]
@@ -490,14 +506,16 @@ class SyntheticDiffInDiff:
         n_jobs: int = 1,
     ) -> float:
         """
-        Estimate standard error using placebo bootstrap.
+        Estimate standard error using a placebo bootstrap.
 
-        Randomly assigns treatment to control units and re-estimates
-        the effect to build a distribution of placebo effects.
+        Following Arkhangelsky et al. (2021, Algorithm 4), the real treated
+        units are discarded and placebo treatments are assigned at random among
+        the control units. The spread of the resulting placebo effects
+        approximates the sampling distribution of the estimator.
 
         Args:
             n_bootstrap: Number of bootstrap iterations
-            seed: Random seed for reproducibility (None for no seed)
+            seed: Random seed for reproducibility (None for nondeterministic)
             n_jobs: Number of parallel jobs (-1 for all cores)
 
         Returns:
@@ -505,8 +523,8 @@ class SyntheticDiffInDiff:
         """
         logger.info(f"Estimating standard error with {n_bootstrap} bootstrap samples...")
 
-        if seed is not None:
-            np.random.seed(seed)
+        # Local generator avoids mutating the caller's global NumPy RNG state.
+        rng = np.random.default_rng(seed)
 
         placebo_fn = partial(
             self._run_placebo,
@@ -517,11 +535,13 @@ class SyntheticDiffInDiff:
             post_col=self.post_col,
         )
 
+        # Placebo datasets are drawn in the parent process, so results are
+        # deterministic given the seed regardless of n_jobs.
         effects = Parallel(n_jobs=n_jobs)(
-            delayed(placebo_fn)(self._create_placebo_data()) for _ in range(n_bootstrap)
+            delayed(placebo_fn)(self._create_placebo_data(rng)) for _ in range(n_bootstrap)
         )
 
-        valid_effects = [e for e in effects if not np.isnan(e)]
+        valid_effects = [e for e in effects if e is not None and not np.isnan(e)]
 
         if len(valid_effects) < 10:
             warnings.warn(
@@ -535,18 +555,28 @@ class SyntheticDiffInDiff:
 
         return self.standard_error
 
-    def _create_placebo_data(self) -> pd.DataFrame:
-        """Create placebo dataset by randomly assigning a control unit to treatment."""
+    def _create_placebo_data(self, rng: np.random.Generator) -> pd.DataFrame:
+        """
+        Create a placebo dataset for inference.
+
+        Discards the real treated units and randomly designates the same number
+        of control units as placebo-treated (Arkhangelsky et al., 2021). This
+        keeps the placebo effects free of the real treatment signal.
+        """
         control_units = self.data[~self.data[self.treat_col]][self.units_col].unique()
 
-        if len(control_units) == 0:
-            raise ValueError("No control units available for placebo test.")
+        if len(control_units) < 2:
+            raise ValueError("Need at least 2 control units for placebo inference.")
 
-        placebo_unit = np.random.choice(control_units)
+        n_treated_units = self.data[self.data[self.treat_col]][self.units_col].nunique()
 
-        df = self.data.copy()
-        df.loc[df[self.units_col] == placebo_unit, self.treat_col] = True
-        df[self.treat_col] = df[self.treat_col].astype(bool)
+        # At least one placebo-treated unit, leaving at least one as control.
+        n_placebo = max(1, min(n_treated_units, len(control_units) - 1))
+        placebo_units = rng.choice(control_units, size=n_placebo, replace=False)
+
+        # Keep only control units, then relabel the chosen ones as treated.
+        df = self.data[~self.data[self.treat_col]].copy()
+        df[self.treat_col] = df[self.units_col].isin(placebo_units).astype(bool)
 
         return df
 
@@ -932,7 +962,9 @@ class SyntheticDiffInDiff:
         # Add intervention line and post-treatment shading
         plot_max_time = float(max_time)
         ax.axvline(x=plot_treatment_time, color="black", alpha=0.3)
-        ax.axvspan(plot_treatment_time, plot_max_time, color="gray", alpha=0.1, label="Post-Treatment")
+        ax.axvspan(
+            plot_treatment_time, plot_max_time, color="gray", alpha=0.1, label="Post-Treatment"
+        )
 
         # Formatting
         plot_title = title if title is not None else "SDID Match: Treated vs Synthetic Control"
