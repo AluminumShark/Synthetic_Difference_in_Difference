@@ -50,7 +50,7 @@ Homepage = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference"
 Documentation = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/blob/main/README.md"
 Repository = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference"
 Issues = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/issues"
-Changelog = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/releases/tag/SDID"
+Changelog = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/releases"
 
 [project.optional-dependencies]
 dev = [
