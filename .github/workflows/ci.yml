@@ -1,0 +1,63 @@
+# Quality gate for every push and pull request, so main stays releasable.
+# This workflow never touches PyPI.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:        # allow manual runs from the Actions tab
+
+permissions:
+  contents: read            # least privilege: only needs to read the code
+
+# Cancel an in-flight run when the same ref is pushed again, to save runner time
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3   # setup-uv publishes no floating major tag, so pin the full version
+        with:
+          enable-cache: true               # cache downloaded wheels; much faster on later runs
+      - run: uv sync --locked              # --locked fails if uv.lock is out of sync with pyproject.toml
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    name: Test (py${{ matrix.python-version }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false                     # keep other combinations running so one report covers everything
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        include:                           # spot-check Windows and macOS instead of a full matrix
+          - os: windows-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.13"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      - run: uv run pytest
+
+  build:
+    name: Build & metadata check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      - run: uv build                        # produce the sdist and the wheel
+      - run: uvx twine check --strict dist/*  # catch broken README/metadata here, not at upload time

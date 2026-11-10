@@ -1,0 +1,199 @@
+# Pushing a v* tag runs the whole release:
+#   build -> TestPyPI -> real install from TestPyPI (smoke test) -> PyPI -> GitHub Release
+#
+# No API token is involved: both uploads use PyPI trusted publishing (OIDC).
+# GitHub mints a short-lived identity token for this workflow, and PyPI only accepts
+# the upload after verifying it really is release.yml of
+# AluminumShark/Synthetic_Difference_in_Difference running in the expected environment.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]            # the only production trigger: git push origin v0.4.1
+  workflow_dispatch:        # manual trigger; defaults to TestPyPI only, safe for rehearsals
+    inputs:
+      target:
+        description: "Publish target"
+        type: choice
+        default: testpypi
+        options:
+          - testpypi
+          - testpypi+pypi
+
+permissions:
+  contents: read            # least privilege by default; individual jobs widen it
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false  # never cancel a release midway
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1. Build, and refuse to continue if the tag and the version disagree
+  # ---------------------------------------------------------------
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3   # setup-uv publishes no floating major tag, so pin the full version
+        with:
+          enable-cache: true
+
+      - name: Resolve version and verify it matches the tag
+        id: version
+        run: |
+          set -euo pipefail
+          # src/sdid/__init__.py is the single source of truth; pyproject.toml reads it via hatch
+          pkg=$(python3 -c "import re,pathlib; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('src/sdid/__init__.py').read_text(encoding='utf-8')).group(1))")
+          echo "__init__.py = $pkg"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            echo "git tag     = $tag"
+            if [ "$tag" != "$pkg" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match package version $pkg (fix src/sdid/__init__.py or retag)"
+              exit 1
+            fi
+          fi
+          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests once more before publishing
+        run: |
+          uv sync --locked
+          uv run pytest -q
+
+      - name: Build sdist + wheel
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          uv build
+          ls -l dist/
+          # Confirm hatch resolved the dynamic version as expected
+          test -f "dist/sdid-${VERSION}.tar.gz"
+          test -f "dist/sdid-${VERSION}-py3-none-any.whl"
+
+      - name: Check package metadata
+        run: uvx twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------
+  # 2. Publish to TestPyPI (the dress rehearsal)
+  # ---------------------------------------------------------------
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi                        # must match the environment of the TestPyPI trusted publisher
+      url: https://test.pypi.org/p/sdid
+    permissions:
+      id-token: write                       # required for OIDC; trusted publishing fails without it
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true               # re-uploading the same version to TestPyPI is not an error
+
+  # ---------------------------------------------------------------
+  # 3. Smoke test: install from TestPyPI for real, so "uploads fine"
+  #    cannot be mistaken for "installs fine".
+  #    Dependencies (cvxpy, numpy, ...) live only on PyPI, hence the extra index.
+  # ---------------------------------------------------------------
+  smoke-test:
+    name: Install from TestPyPI
+    needs: [build, publish-testpypi]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: pip install from TestPyPI (with retry)
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/smoke
+          installed=0
+          for attempt in 1 2 3 4 5; do
+            if /tmp/smoke/bin/pip install \
+                 --index-url https://test.pypi.org/simple/ \
+                 --extra-index-url https://pypi.org/simple/ \
+                 "sdid==${VERSION}"; then
+              installed=1
+              break
+            fi
+            # A freshly uploaded version takes a few seconds to appear in the index
+            echo "TestPyPI index not ready yet, retry ${attempt}..."
+            sleep 20
+          done
+          if [ "$installed" -ne 1 ]; then
+            echo "::error::could not install sdid==${VERSION} from TestPyPI"
+            exit 1
+          fi
+          /tmp/smoke/bin/python -c "import sdid; print(sdid.__version__); assert sdid.__version__ == '${VERSION}'"
+
+  # ---------------------------------------------------------------
+  # 4. Publish to PyPI, only once the rehearsal passed
+  # ---------------------------------------------------------------
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build, smoke-test]
+    if: github.event_name == 'push' || inputs.target == 'testpypi+pypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi                            # add a required reviewer to this environment for a manual gate
+      url: https://pypi.org/p/sdid
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # No skip-existing here: a duplicate upload to production should fail loudly
+
+  # ---------------------------------------------------------------
+  # 5. Create the GitHub Release with the same artifacts
+  # ---------------------------------------------------------------
+  github-release:
+    name: GitHub Release
+    needs: publish-pypi
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write                       # creating a release needs write access
+    steps:
+      - uses: actions/checkout@v7           # --generate-notes needs the history
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # v1.2.3 is a final release; anything else (v1.2.3rc1, v1.2.3-beta) is marked pre-release
+          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then prerelease=""; else prerelease="--prerelease"; fi
+          gh release create "$tag" dist/* \
+            --title "$tag" \
+            --generate-notes \
+            --verify-tag \
+            $prerelease
