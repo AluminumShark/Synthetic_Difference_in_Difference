@@ -1,6 +1,6 @@
 [project]
 name = "sdid"
-version = "0.4.0"
+dynamic = ["version"]
 description = "Synthetic Difference-in-Differences (SDID) for causal inference in Python"
 readme = "README.md"
 license = { text = "MIT" }
@@ -62,6 +62,10 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Single source of truth for the version: __version__ in src/sdid/__init__.py
+[tool.hatch.version]
+path = "src/sdid/__init__.py"
 
 [tool.hatch.build.targets.sdist]
 include = [

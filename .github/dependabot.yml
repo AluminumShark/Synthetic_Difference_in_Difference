@@ -1,0 +1,14 @@
+# Keep GitHub Actions versions up to date.
+# Especially useful because astral-sh/setup-uv publishes no floating major tag
+# (there is no @v10), so the full version must be pinned and would otherwise rot.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]        # one PR per week covering all action bumps
