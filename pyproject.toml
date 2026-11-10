@@ -53,13 +53,6 @@ Repository = "https://github.com/AluminumShark/Synthetic_Difference_in_Differenc
 Issues = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/issues"
 Changelog = "https://github.com/AluminumShark/Synthetic_Difference_in_Difference/releases"
 
-[project.optional-dependencies]
-dev = [
-    "ruff>=0.8.0",
-    "pytest>=8.0.0",
-    "pytest-cov>=4.0.0",
-]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -130,9 +123,13 @@ exclude_lines = [
     "if TYPE_CHECKING:",
 ]
 
+# Local-only dev tooling (PEP 735); uv installs this group by default.
+# Deliberately not a [project.optional-dependencies] extra: an extra would be published
+# in the package metadata as a `sdid[dev]` install target that nobody maintains.
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
     "ruff>=0.14.9",
     "ty>=0.0.13",
 ]
