@@ -1,5 +1,11 @@
-# Pushing a v* tag runs the whole release:
-#   build -> TestPyPI -> real install from TestPyPI (smoke test) -> PyPI -> GitHub Release
+# Release pipeline:
+#   gate -> build -> TestPyPI -> real install from TestPyPI (smoke test) -> PyPI -> GitHub Release
+#
+# Triggers:
+#   - push to main: releases automatically, but only when __version__ has no tag yet,
+#     so an ordinary merge is a no-op and a merged version bump ships.
+#   - push of a v* tag: releases that tag (the tag must match __version__).
+#   - manual dispatch: defaults to TestPyPI only, safe for rehearsals.
 #
 # No API token is involved: both uploads use PyPI trusted publishing (OIDC).
 # GitHub mints a short-lived identity token for this workflow, and PyPI only accepts
@@ -9,8 +15,9 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]            # the only production trigger: git push origin v0.4.1
-  workflow_dispatch:        # manual trigger; defaults to TestPyPI only, safe for rehearsals
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
     inputs:
       target:
         description: "Publish target"
@@ -29,36 +36,81 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------
-  # 1. Build, and refuse to continue if the tag and the version disagree
+  # 1. Decide whether this commit should be released at all.
+  #    This is what makes "merge a version bump" the release trigger:
+  #    a push to main only proceeds when the version has never been tagged.
+  # ---------------------------------------------------------------
+  gate:
+    name: Decide whether to release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0                    # need the tags to know what was already released
+
+      - name: Resolve version and decide
+        id: check
+        run: |
+          set -euo pipefail
+          # src/sdid/__init__.py is the single source of truth; pyproject.toml reads it via hatch
+          version=$(python3 -c "import re,pathlib; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('src/sdid/__init__.py').read_text(encoding='utf-8')).group(1))")
+          echo "package version = $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            echo "tag             = $tag"
+            if [ "$tag" != "$version" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match package version $version (fix src/sdid/__init__.py or retag)"
+              exit 1
+            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "manual run, proceeding"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Push to main: release only if this version has not been released yet
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "v${version} is already tagged, nothing to release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v${version} has no tag yet, releasing it"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+          RELEASE: ${{ steps.check.outputs.release }}
+        run: |
+          if [ "$RELEASE" = "true" ]; then
+            echo "### Releasing \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### No release: \`$VERSION\` is already tagged" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ---------------------------------------------------------------
+  # 2. Build the distributions
   # ---------------------------------------------------------------
   build:
     name: Build distributions
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: astral-sh/setup-uv@v10.3.3   # setup-uv publishes no floating major tag, so pin the full version
         with:
           enable-cache: true
-
-      - name: Resolve version and verify it matches the tag
-        id: version
-        run: |
-          set -euo pipefail
-          # src/sdid/__init__.py is the single source of truth; pyproject.toml reads it via hatch
-          pkg=$(python3 -c "import re,pathlib; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('src/sdid/__init__.py').read_text(encoding='utf-8')).group(1))")
-          echo "__init__.py = $pkg"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            tag="${GITHUB_REF_NAME#v}"
-            echo "git tag     = $tag"
-            if [ "$tag" != "$pkg" ]; then
-              echo "::error::tag ${GITHUB_REF_NAME} does not match package version $pkg (fix src/sdid/__init__.py or retag)"
-              exit 1
-            fi
-          fi
-          echo "version=$pkg" >> "$GITHUB_OUTPUT"
 
       - name: Run tests once more before publishing
         run: |
@@ -67,7 +119,7 @@ jobs:
 
       - name: Build sdist + wheel
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.gate.outputs.version }}
         run: |
           set -euo pipefail
           uv build
@@ -86,11 +138,11 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------
-  # 2. Publish to TestPyPI (the dress rehearsal)
+  # 3. Publish to TestPyPI (the dress rehearsal)
   # ---------------------------------------------------------------
   publish-testpypi:
     name: Publish to TestPyPI
-    needs: build
+    needs: [gate, build]
     runs-on: ubuntu-latest
     environment:
       name: testpypi                        # must match the environment of the TestPyPI trusted publisher
@@ -108,13 +160,13 @@ jobs:
           skip-existing: true               # re-uploading the same version to TestPyPI is not an error
 
   # ---------------------------------------------------------------
-  # 3. Smoke test: install from TestPyPI for real, so "uploads fine"
+  # 4. Smoke test: install from TestPyPI for real, so "uploads fine"
   #    cannot be mistaken for "installs fine".
   #    Dependencies (cvxpy, numpy, ...) live only on PyPI, hence the extra index.
   # ---------------------------------------------------------------
   smoke-test:
     name: Install from TestPyPI
-    needs: [build, publish-testpypi]
+    needs: [gate, publish-testpypi]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-python@v7
@@ -122,7 +174,7 @@ jobs:
           python-version: "3.13"
       - name: pip install from TestPyPI (with retry)
         env:
-          VERSION: ${{ needs.build.outputs.version }}
+          VERSION: ${{ needs.gate.outputs.version }}
         run: |
           set -euo pipefail
           python -m venv /tmp/smoke
@@ -146,15 +198,15 @@ jobs:
           /tmp/smoke/bin/python -c "import sdid; print(sdid.__version__); assert sdid.__version__ == '${VERSION}'"
 
   # ---------------------------------------------------------------
-  # 4. Publish to PyPI, only once the rehearsal passed
+  # 5. Publish to PyPI, only once the rehearsal passed
   # ---------------------------------------------------------------
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, smoke-test]
+    needs: [gate, smoke-test]
     if: github.event_name == 'push' || inputs.target == 'testpypi+pypi'
     runs-on: ubuntu-latest
     environment:
-      name: pypi                            # add a required reviewer to this environment for a manual gate
+      name: pypi                            # a required reviewer on this environment is the manual gate
       url: https://pypi.org/p/sdid
     permissions:
       id-token: write
@@ -167,15 +219,15 @@ jobs:
         # No skip-existing here: a duplicate upload to production should fail loudly
 
   # ---------------------------------------------------------------
-  # 5. Create the GitHub Release with the same artifacts
+  # 6. Create the GitHub Release with the same artifacts.
+  #    On a push to main there is no tag yet, so gh creates it from this commit.
   # ---------------------------------------------------------------
   github-release:
     name: GitHub Release
-    needs: publish-pypi
-    if: github.ref_type == 'tag'
+    needs: [gate, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
-      contents: write                       # creating a release needs write access
+      contents: write                       # creating a release (and its tag) needs write access
     steps:
       - uses: actions/checkout@v7           # --generate-notes needs the history
         with:
@@ -187,13 +239,15 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.gate.outputs.version }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          # v1.2.3 is a final release; anything else (v1.2.3rc1, v1.2.3-beta) is marked pre-release
-          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then prerelease=""; else prerelease="--prerelease"; fi
+          tag="v${VERSION}"
+          # 1.2.3 is a final release; anything else (1.2.3rc1, 1.2.3.dev1) is marked pre-release
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then prerelease=""; else prerelease="--prerelease"; fi
+          # --target is used only when the tag does not exist yet (push to main)
           gh release create "$tag" dist/* \
             --title "$tag" \
+            --target "$GITHUB_SHA" \
             --generate-notes \
-            --verify-tag \
             $prerelease
