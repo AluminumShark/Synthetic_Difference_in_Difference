@@ -84,7 +84,7 @@ pip install .
 ```bash
 git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
 cd Synthetic_Difference_in_Difference
-uv sync --extra dev
+uv sync
 ```
 
 ### Examples
@@ -97,8 +97,8 @@ uv sync --extra dev
 ```bash
 git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
 cd Synthetic_Difference_in_Difference
-uv sync --extra dev
-uv run jupyter lab examples/example.ipynb
+uv sync
+uv run --with jupyter jupyter lab examples/example.ipynb
 ```
 
 ### Quick Start
@@ -240,7 +240,7 @@ SDID relies on these key assumptions:
 
 ```bash
 # Install dev dependencies
-uv sync --extra dev
+uv sync
 
 # Run tests
 uv run pytest tests/ -v
@@ -336,7 +336,7 @@ pip install .
 ```bash
 git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
 cd Synthetic_Difference_in_Difference
-uv sync --extra dev
+uv sync
 ```
 
 ### 範例
@@ -349,8 +349,8 @@ uv sync --extra dev
 ```bash
 git clone https://github.com/AluminumShark/Synthetic_Difference_in_Difference.git
 cd Synthetic_Difference_in_Difference
-uv sync --extra dev
-uv run jupyter lab examples/example.ipynb
+uv sync
+uv run --with jupyter jupyter lab examples/example.ipynb
 ```
 
 ### 快速開始
@@ -492,7 +492,7 @@ SDID 依賴以下關鍵假設：
 
 ```bash
 # 安裝開發相依套件
-uv sync --extra dev
+uv sync
 
 # 執行測試
 uv run pytest tests/ -v
