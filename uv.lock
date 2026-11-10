@@ -1468,16 +1468,10 @@ dependencies = [
     { name = "statsmodels" },
 ]
 
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "pytest-cov" },
     { name = "ruff" },
     { name = "ty" },
 ]
@@ -1489,17 +1483,14 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.7.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "scipy", specifier = ">=1.11.0" },
     { name = "statsmodels", specifier = ">=0.14.0" },
 ]
-provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-cov", specifier = ">=4.0.0" },
     { name = "ruff", specifier = ">=0.14.9" },
     { name = "ty", specifier = ">=0.0.13" },
 ]
