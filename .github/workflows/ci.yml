@@ -36,12 +36,14 @@ jobs:
       fail-fast: false                     # keep other combinations running so one report covers everything
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-        include:                           # spot-check Windows and macOS instead of a full matrix
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:                           # spot-check other OSes on the local dev version and the newest
           - os: windows-latest
             python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.14"
           - os: macos-latest
-            python-version: "3.13"
+            python-version: "3.14"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3

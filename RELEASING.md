@@ -1,18 +1,33 @@
 # Releasing
 
-Releases are fully automated by GitHub Actions and use **no API tokens** — uploads
-authenticate with PyPI trusted publishing (OIDC). The pipeline lives in
+Releases are automated by GitHub Actions and use **no API tokens** — uploads authenticate
+with PyPI trusted publishing (OIDC). The pipeline lives in
 [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
+**Merging a version bump is the release trigger.** Every push to `main` starts the
+pipeline, but a gate job stops it immediately unless `__version__` has no tag yet, so an
+ordinary merge costs about ten seconds and publishes nothing.
+
 ```
-git push origin v0.4.1
+merge a version bump into main
         |
-        |- build        version vs tag check -> pytest -> uv build -> twine check
-        |- TestPyPI     upload to the test index
+        |- gate         release only if v<version> is not tagged yet, otherwise stop here
+        |- build        pytest -> uv build -> twine check
+        |- TestPyPI     upload to the test index          [waits for your approval]
         |- smoke-test   pip install from TestPyPI and import the package
-        |- PyPI         upload to the production index (can require manual approval)
-        '- Release      create the GitHub Release with the same dist files
+        |- PyPI         upload to the production index    [waits for your approval]
+        '- Release      create the tag and the GitHub Release with the same dist files
 ```
+
+Both uploads pass through an environment with you as a required reviewer, so nothing
+reaches an index until you approve it in the Actions tab (**Review deployments**).
+
+Other ways to trigger it:
+
+- **Push a `v*` tag** — releases that tag. The gate fails the run if the tag disagrees
+  with `__version__`.
+- **Run it manually** (Actions -> Release -> *Run workflow*) — `target: testpypi` stops
+  after the smoke test, which is the safe way to rehearse.
 
 ---
 
@@ -28,19 +43,21 @@ Go to <https://pypi.org/manage/project/sdid/settings/publishing/> -> *Add a new 
 | Workflow name | `release.yml` |
 | Environment name | `pypi` |
 
-### 2. TestPyPI pending publisher
-The name `sdid` is not registered on TestPyPI, so there is no project settings page yet.
-Use a *pending* publisher instead: <https://test.pypi.org/manage/account/publishing/>,
-set PyPI Project Name to `sdid`, the rest as above but with Environment name `testpypi`.
-It converts to a normal publisher after the first successful upload.
+### 2. TestPyPI trusted publisher
+Same values at <https://test.pypi.org/manage/project/sdid/settings/publishing/>, but with
+Environment name `testpypi`. (Before the project existed on TestPyPI this had to be
+registered as a *pending* publisher at
+<https://test.pypi.org/manage/account/publishing/>; the first successful upload converted
+it.)
 
 ### 3. GitHub Environments
-Repo -> Settings -> Environments, create two environments (names must match the above exactly):
+Repo -> Settings -> Environments, with names matching the above exactly:
 
 - `testpypi`
-- `pypi` — enable **Required reviewers** (add yourself). The workflow then pauses for
-  approval before touching the production index, which is the last safety net against
-  an accidental tag push.
+- `pypi`
+
+Both have **Required reviewers** enabled. That approval is the gate that keeps the
+automatic trigger safe: merging starts the pipeline, but publishing still needs a click.
 
 ---
 
@@ -50,30 +67,30 @@ Repo -> Settings -> Environments, create two environments (names must match the 
    `pyproject.toml` declares `dynamic = ["version"]` with `[tool.hatch.version]` and reads
    it from there, so there is nothing to keep in sync.
 2. `uv lock` -> `uv run pytest` -> `uv run ruff check .`
-3. Commit, push to `main`, and wait for CI to pass.
-4. Tag and push:
-   ```bash
-   git tag -a v0.4.1 -m "v0.4.1"
-   git push origin v0.4.1
-   ```
-5. Watch the Release workflow in the Actions tab. If the `pypi` environment requires a
-   reviewer, approve it there (**Review deployments -> Approve**).
+3. Open a PR, let CI pass, and merge it.
+4. The Release workflow starts on the merge. Approve `testpypi`, then `pypi`, in the
+   Actions tab.
+5. The workflow creates the `v<version>` tag and the GitHub Release itself. Do not tag by
+   hand.
 
 > A version number can only be used once: neither PyPI nor TestPyPI allows overwriting an
 > existing version. If a release goes wrong, move to the next version (0.4.1 -> 0.4.2).
 
-## Rehearsing without touching production
+## Supported Python versions
 
-Actions -> **Release** -> *Run workflow* -> set `target` to `testpypi`.
-This runs build, the TestPyPI upload and the smoke test, then stops: no PyPI upload and
-no GitHub Release.
+CI tests 3.10 through 3.14 on Linux, plus 3.13 and 3.14 on Windows and 3.14 on macOS.
+When adding a new Python version, update three places: the `python-version` matrix in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), the
+`Programming Language :: Python :: 3.x` classifiers in `pyproject.toml`, and
+`requires-python` if the floor moves.
 
 ## Troubleshooting
 
 | Message | Cause |
 | --- | --- |
+| Release run finished with every job skipped | The gate found `v<version>` already tagged, i.e. the merge did not change the version. Expected for ordinary merges. |
 | `invalid-publisher` / OIDC 403 | One of owner / repo / workflow filename / environment does not match the publisher registered on PyPI |
 | `Missing id-token permission` | The job is missing `permissions: id-token: write` |
 | `File already exists` | That version was already uploaded; bump the version |
-| `tag v0.4.1 does not match package version` | The tag disagrees with `__version__` in `src/sdid/__init__.py` |
+| `tag v0.4.1 does not match package version` | A pushed tag disagrees with `__version__` in `src/sdid/__init__.py` |
 | `Unable to resolve action ...` | A pinned action version does not exist (note that `astral-sh/setup-uv` has no floating major tag) |
