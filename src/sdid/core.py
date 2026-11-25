@@ -67,6 +67,7 @@ class SyntheticDiffInDiff:
     # Class constants
     WEIGHT_THRESHOLD = 1e-6  # Minimum weight to keep
     DEFAULT_NOISE_LEVEL = 0.01  # Fallback when noise can't be estimated
+    TIME_REGULARIZATION_SCALE = 1e-6  # Time-weight ridge relative to the noise level
 
     def __init__(
         self,
@@ -109,6 +110,7 @@ class SyntheticDiffInDiff:
         self.standard_error: float | None = None
         self._unit_intercept: float | None = None  # Intercept from unit weight optimization
         self._time_intercept: float | None = None  # Intercept from time weight optimization
+        self._noise_level: float | None = None  # Cached noise level (sigma)
 
         # Ensure boolean types for indicators
         self.data[self.treat_col] = self.data[self.treat_col].astype(bool)
@@ -192,31 +194,25 @@ class SyntheticDiffInDiff:
 
         return self.treatment_effect
 
-    def _calculate_unit_regularization(self) -> float:
+    def _estimate_noise_level(self) -> float:
         """
-        Calculate regularization parameter (zeta) for unit weights.
+        Estimate the noise level (sigma) used to scale both regularizers.
 
-        Following Arkhangelsky et al. (2021):
-
-            zeta = (N_treated_post)^(1/4) * sigma
-
-        where ``sigma`` is the standard deviation of the first differences of
-        control-unit outcomes in the pre-treatment period. The squared value is
-        applied as the ridge penalty in the weight optimization.
+        Following Arkhangelsky et al. (2021), ``sigma`` is the standard
+        deviation of the first differences of control-unit outcomes over the
+        pre-treatment periods.
 
         Returns:
-            Regularization parameter value (zeta)
+            Estimated noise level (sigma)
         """
-        # Count treated observations in post-treatment period
-        n_treated_post = self.data[self.data[self.post_col] & self.data[self.treat_col]].shape[0]
+        if self._noise_level is not None:
+            return self._noise_level
 
-        # Estimate noise from control units in pre-treatment period
         control_pre = self.data[(~self.data[self.post_col]) & (~self.data[self.treat_col])]
 
         if control_pre.empty:
             raise ValueError("No pre-treatment control data available for regularization.")
 
-        # Noise level: std of first differences
         noise_level = (
             control_pre.sort_values(self.times_col)
             .groupby(self.units_col)[self.outcome_col]
@@ -231,28 +227,39 @@ class SyntheticDiffInDiff:
             )
             noise_level = self.DEFAULT_NOISE_LEVEL
 
-        return (n_treated_post**0.25) * noise_level
+        self._noise_level = float(noise_level)
+        return self._noise_level
+
+    def _calculate_unit_regularization(self) -> float:
+        """
+        Calculate regularization parameter (zeta) for unit weights.
+
+        Following Arkhangelsky et al. (2021):
+
+            zeta = (N_treated * T_post)^(1/4) * sigma
+
+        The unit-weight objective penalizes ``zeta^2 * T_pre * ||omega||^2``.
+
+        Returns:
+            Regularization parameter value (zeta)
+        """
+        # Number of treated observations in the post-treatment period
+        n_treated_post = self.data[self.data[self.post_col] & self.data[self.treat_col]].shape[0]
+
+        return (n_treated_post**0.25) * self._estimate_noise_level()
 
     def _calculate_time_regularization(self) -> float:
         """
-        Calculate regularization parameter for time weights.
+        Calculate regularization parameter (zeta) for time weights.
+
+        Matches the reference R package ``synthdid``: a negligible ridge term,
+        ``zeta = 1e-6 * sigma``, whose only role is to make the solution unique.
+        The time-weight objective penalizes ``zeta^2 * N_control * ||lambda||^2``.
 
         Returns:
-            Regularization parameter value
+            Regularization parameter value (zeta)
         """
-        pre_data = self.data[~self.data[self.post_col]]
-
-        if pre_data.empty:
-            return self.DEFAULT_NOISE_LEVEL
-
-        # Volatility across units within time periods
-        time_volatility = pre_data.groupby(self.times_col)[self.outcome_col].std().mean()
-
-        if np.isnan(time_volatility) or time_volatility == 0:
-            time_volatility = self.DEFAULT_NOISE_LEVEL
-
-        n_periods = pre_data[self.times_col].nunique()
-        return time_volatility * (n_periods**-0.25)
+        return self.TIME_REGULARIZATION_SCALE * self._estimate_noise_level()
 
     def _estimate_unit_weights(self, verbose: bool = False) -> None:
         """
@@ -306,9 +313,13 @@ class SyntheticDiffInDiff:
         Y = control_matrix.values
         y = treated_avg.values
 
-        # Objective: minimize squared error with intercept + ridge penalty (zeta^2)
+        # Objective: squared error with intercept + ridge penalty zeta^2 * T_pre.
+        # The T_pre factor keeps the penalty on the same scale as the sum of
+        # T_pre squared residuals (Arkhangelsky et al., 2021, eq. 4).
+        n_pre_periods = len(common_times)
         objective = cp.Minimize(
-            cp.sum_squares(Y @ weights + intercept - y) + (zeta**2) * cp.sum_squares(weights)
+            cp.sum_squares(Y @ weights + intercept - y)
+            + (zeta**2) * n_pre_periods * cp.sum_squares(weights)
         )
         constraints = [cp.sum(weights) == 1]
 
@@ -347,7 +358,7 @@ class SyntheticDiffInDiff:
         logger.info("Estimating time weights...")
 
         zeta = self._calculate_time_regularization()
-        logger.info(f"Time regularization: {zeta:.4f}")
+        logger.info(f"Time regularization: {zeta:.3e}")
 
         control_data = self.data[~self.data[self.treat_col]]
         pre_control = control_data[~control_data[self.post_col]]
@@ -382,8 +393,12 @@ class SyntheticDiffInDiff:
         X = pre_matrix.values
         y = post_avg.values
 
+        # Ridge penalty zeta^2 * N_control, the time-weight analogue of the
+        # zeta^2 * T_pre penalty on the unit weights.
+        n_control_units = len(common_units)
         objective = cp.Minimize(
-            cp.sum_squares(X @ weights + intercept - y) + zeta * cp.sum_squares(weights)
+            cp.sum_squares(X @ weights + intercept - y)
+            + (zeta**2) * n_control_units * cp.sum_squares(weights)
         )
         constraints = [cp.sum(weights) == 1]
 
