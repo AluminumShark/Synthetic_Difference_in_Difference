@@ -31,7 +31,7 @@ SDID estimates the Average Treatment Effect on the Treated (ATT) through a weigh
 
 We find optimal unit weights $\hat{\omega}$ by solving:
 
-$$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T_{pre}} \left( \sum_{i \in \mathcal{C}} \omega_i Y_{it} + \alpha - \bar{Y}_{treated,t} \right)^2 + \zeta_{unit}^2 \|\omega\|_2^2$$
+$$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T_{pre}} \left( \sum_{i \in \mathcal{C}} \omega_i Y_{it} + \alpha - \bar{Y}_{treated,t} \right)^2 + \zeta_{unit}^2 \, T_{pre} \, \|\omega\|_2^2$$
 
 subject to $\omega_i \geq 0$ and $\sum_{i \in \mathcal{C}} \omega_i = 1$
 
@@ -39,15 +39,17 @@ where:
 - $\mathcal{C}$ is the set of control units
 - $Y_{it}$ is the outcome for unit $i$ at time $t$
 - $\alpha$ is an intercept term (allows level differences)
-- $\zeta_{unit}$ is the regularization parameter
+- $\zeta_{unit} = (N_{treated} \cdot T_{post})^{1/4} \, \hat{\sigma}$ is the regularization parameter, with $\hat{\sigma}$ the standard deviation of first-differenced control outcomes over the pre-treatment periods
 
 #### Time Weights Optimization
 
 Time weights $\hat{\lambda}$ are chosen so that, for the **control** units, a weighted average of pre-treatment outcomes predicts their average post-treatment outcome:
 
-$$\hat{\lambda}, \hat{\beta} = \underset{\lambda, \beta}{\arg\min} \sum_{i \in \mathcal{C}} \left( \beta + \sum_{t=1}^{T_{pre}} \lambda_t Y_{it} - \frac{1}{T_{post}} \sum_{t > T_0} Y_{it} \right)^2 + \zeta_{time} \|\lambda\|_2^2$$
+$$\hat{\lambda}, \hat{\beta} = \underset{\lambda, \beta}{\arg\min} \sum_{i \in \mathcal{C}} \left( \beta + \sum_{t=1}^{T_{pre}} \lambda_t Y_{it} - \frac{1}{T_{post}} \sum_{t > T_0} Y_{it} \right)^2 + \zeta_{time}^2 \, |\mathcal{C}| \, \|\lambda\|_2^2$$
 
 subject to $\lambda_t \geq 0$ and $\sum_{t=1}^{T_{pre}} \lambda_t = 1$
+
+where $\zeta_{time} = 10^{-6} \, \hat{\sigma}$ is a negligible ridge term that only makes the solution unique.
 
 #### Treatment Effect Estimation
 
@@ -62,6 +64,18 @@ where:
 - $\tau$ is the **treatment effect** (our target parameter)
 
 Observations are weighted by $w_{it} = \hat{\omega}_i \cdot \hat{\lambda}_t$.
+
+### Validation
+
+The test suite reproduces the California Proposition 99 benchmark from Arkhangelsky et al. (2021), using the dataset shipped with the reference R package [`synthdid`](https://github.com/synth-inference/synthdid):
+
+| | `sdid` | Published / R `synthdid` |
+|---|---|---|
+| ATT (packs per capita) | -15.605 | -15.60 |
+| Largest unit weights | Nevada 0.124, New Hampshire 0.105, Connecticut 0.078 | same |
+| Time weights (1986 / 1987 / 1988) | 0.366 / 0.206 / 0.427 | same |
+
+Versions before 0.5.0 under-regularized the unit weights and do not reproduce this benchmark (they give -12.19); upgrade if you rely on the estimates.
 
 ### Installation
 
@@ -283,7 +297,7 @@ SDID 透過加權雙向固定效應迴歸估計處理組的平均處理效果 (A
 
 我們通過求解以下問題找到最佳單位權重 $\hat{\omega}$：
 
-$$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T_{pre}} \left( \sum_{i \in \mathcal{C}} \omega_i Y_{it} + \alpha - \bar{Y}_{treated,t} \right)^2 + \zeta_{unit}^2 \|\omega\|_2^2$$
+$$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T_{pre}} \left( \sum_{i \in \mathcal{C}} \omega_i Y_{it} + \alpha - \bar{Y}_{treated,t} \right)^2 + \zeta_{unit}^2 \, T_{pre} \, \|\omega\|_2^2$$
 
 限制條件：$\omega_i \geq 0$ 且 $\sum_{i \in \mathcal{C}} \omega_i = 1$
 
@@ -291,15 +305,17 @@ $$\hat{\omega}, \hat{\alpha} = \underset{\omega, \alpha}{\arg\min} \sum_{t=1}^{T
 - $\mathcal{C}$ 為控制單位集合
 - $Y_{it}$ 為單位 $i$ 在時間 $t$ 的結果
 - $\alpha$ 為截距項（允許水平差異）
-- $\zeta_{unit}$ 為正則化參數
+- $\zeta_{unit} = (N_{treated} \cdot T_{post})^{1/4} \, \hat{\sigma}$ 為正則化參數，其中 $\hat{\sigma}$ 為控制單位處理前結果一階差分的標準差
 
 #### 時間權重優化
 
 時間權重 $\hat{\lambda}$ 的選取，是讓**控制單位**的處理前結果加權平均能預測其處理後的平均結果：
 
-$$\hat{\lambda}, \hat{\beta} = \underset{\lambda, \beta}{\arg\min} \sum_{i \in \mathcal{C}} \left( \beta + \sum_{t=1}^{T_{pre}} \lambda_t Y_{it} - \frac{1}{T_{post}} \sum_{t > T_0} Y_{it} \right)^2 + \zeta_{time} \|\lambda\|_2^2$$
+$$\hat{\lambda}, \hat{\beta} = \underset{\lambda, \beta}{\arg\min} \sum_{i \in \mathcal{C}} \left( \beta + \sum_{t=1}^{T_{pre}} \lambda_t Y_{it} - \frac{1}{T_{post}} \sum_{t > T_0} Y_{it} \right)^2 + \zeta_{time}^2 \, |\mathcal{C}| \, \|\lambda\|_2^2$$
 
 限制條件：$\lambda_t \geq 0$ 且 $\sum_{t=1}^{T_{pre}} \lambda_t = 1$
+
+其中 $\zeta_{time} = 10^{-6} \, \hat{\sigma}$ 是極小的 ridge 項，僅用來確保解唯一。
 
 #### 處理效果估計
 
@@ -314,6 +330,18 @@ $$Y_{it} = \alpha_i + \gamma_t + \tau \cdot D_{it} + \varepsilon_{it}$$
 - $\tau$ 為**處理效果**（目標參數）
 
 觀測值權重為 $w_{it} = \hat{\omega}_i \cdot \hat{\lambda}_t$。
+
+### 驗證
+
+測試套件會重現 Arkhangelsky et al. (2021) 的加州 Proposition 99 基準結果，資料取自官方 R 套件 [`synthdid`](https://github.com/synth-inference/synthdid)：
+
+| | `sdid` | 論文 / R `synthdid` |
+|---|---|---|
+| ATT（人均香菸包數） | -15.605 | -15.60 |
+| 最大的單位權重 | Nevada 0.124、New Hampshire 0.105、Connecticut 0.078 | 相同 |
+| 時間權重（1986 / 1987 / 1988） | 0.366 / 0.206 / 0.427 | 相同 |
+
+0.5.0 之前的版本對單位權重的正則化不足，無法重現此基準（結果為 -12.19）；若你依賴估計結果，請升級。
 
 ### 安裝
 

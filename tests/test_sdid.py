@@ -10,6 +10,8 @@ These tests verify:
 6. Utility methods
 """
 
+from pathlib import Path
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +19,8 @@ import pandas as pd
 import pytest
 
 from sdid import SyntheticDiffInDiff
+
+PROP99_PATH = Path(__file__).parent / "data" / "california_prop99.csv"
 
 # =============================================================================
 # Fixtures - Test Data Generation
@@ -1702,3 +1706,55 @@ class TestSDIDCorrectness:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# =============================================================================
+# Benchmark: California Proposition 99 (Arkhangelsky et al., 2021)
+# =============================================================================
+
+
+class TestProp99Benchmark:
+    """Reproduce the published SDID benchmark on the California Prop 99 panel.
+
+    The data file is the one shipped with the reference R package ``synthdid``
+    (per-capita cigarette sales for 39 states, 1970-2000; California is treated
+    from 1989). The paper and the R package report an ATT of about -15.60.
+    Expected weights are the exact minimizers of the reference objectives.
+    """
+
+    @pytest.fixture(scope="class")
+    def fitted(self):
+        df = pd.read_csv(PROP99_PATH, sep=";")
+        df["treat"] = df["State"] == "California"
+        df["post"] = df["Year"] >= 1989
+        model = SyntheticDiffInDiff(
+            data=df,
+            outcome_col="PacksPerCapita",
+            times_col="Year",
+            units_col="State",
+            treat_col="treat",
+            post_col="post",
+        )
+        model.fit()
+        return model
+
+    def test_att_matches_published_estimate(self, fitted):
+        # R's Frank-Wolfe solver stops at -15.604; the exact optimum is -15.605.
+        assert fitted.treatment_effect == pytest.approx(-15.60, abs=0.01)
+
+    def test_unit_weights_match_reference(self, fitted):
+        expected = {
+            "Nevada": 0.124,
+            "New Hampshire": 0.105,
+            "Connecticut": 0.078,
+            "Delaware": 0.070,
+            "Colorado": 0.057,
+        }
+        for state, weight in expected.items():
+            assert fitted.unit_weights[state] == pytest.approx(weight, abs=0.002)
+
+    def test_time_weights_match_reference(self, fitted):
+        expected = {1986: 0.366, 1987: 0.206, 1988: 0.427}
+        assert set(fitted.time_weights.index) == set(expected)
+        for year, weight in expected.items():
+            assert fitted.time_weights[year] == pytest.approx(weight, abs=0.002)
