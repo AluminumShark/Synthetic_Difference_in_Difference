@@ -1758,3 +1758,30 @@ class TestProp99Benchmark:
         assert set(fitted.time_weights.index) == set(expected)
         for year, weight in expected.items():
             assert fitted.time_weights[year] == pytest.approx(weight, abs=0.002)
+
+    def test_placebo_se_matches_exact_enumeration(self, fitted):
+        # With one treated unit there are only 38 distinct placebos, so the
+        # standard error is computed exactly instead of by random draws.
+        # Enumerating the same 38 placebos with R synthdid gives 9.371; its
+        # Monte Carlo estimate (200 draws) ranges from about 8.0 to 10.6 across
+        # seeds, and the published 8.4 is one such draw.
+        assert fitted.estimate_se() == pytest.approx(9.37, abs=0.02)
+
+
+class TestExactPlaceboInference:
+    """Placebo inference enumerates every assignment when few enough exist."""
+
+    def test_se_does_not_depend_on_seed_when_enumerable(self, simple_panel_data):
+        ses = []
+        for seed in (1, 2):
+            sdid = SyntheticDiffInDiff(
+                data=simple_panel_data,
+                outcome_col="outcome",
+                times_col="time",
+                units_col="unit",
+                treat_col="treated",
+                post_col="post",
+            )
+            sdid.fit()
+            ses.append(sdid.estimate_se(n_bootstrap=400, seed=seed))
+        assert ses[0] == ses[1]

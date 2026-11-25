@@ -69,11 +69,14 @@ Observations are weighted by $w_{it} = \hat{\omega}_i \cdot \hat{\lambda}_t$.
 
 The test suite reproduces the California Proposition 99 benchmark from Arkhangelsky et al. (2021), using the dataset shipped with the reference R package [`synthdid`](https://github.com/synth-inference/synthdid):
 
-| | `sdid` | Published / R `synthdid` |
+| | `sdid` | R `synthdid` 0.0.9 |
 |---|---|---|
-| ATT (packs per capita) | -15.605 | -15.60 |
+| ATT (packs per capita) | -15.605 | -15.604 |
 | Largest unit weights | Nevada 0.124, New Hampshire 0.105, Connecticut 0.078 | same |
 | Time weights (1986 / 1987 / 1988) | 0.366 / 0.206 / 0.427 | same |
+| Placebo standard error | 9.37 (exact) | 9.37 when all 38 placebos are enumerated |
+
+**About the standard error.** The paper reports 8.4, which `synthdid` returns under `set.seed(12345)` with its default 200 random placebo draws. Other seeds give anything from about 8.0 to 10.6, because California is the only treated unit and there are just 38 distinct placebos to draw from. `sdid` evaluates all 38 instead of sampling them, so its standard error is exact and does not depend on the seed. It matches `synthdid` run over the same 38 placebos, not the single published draw.
 
 Versions before 0.5.0 under-regularized the unit weights and do not reproduce this benchmark (they give -12.19); upgrade if you rely on the estimates.
 
@@ -172,7 +175,7 @@ TX    2020  108.7    1        1
 | Method | Description |
 |--------|-------------|
 | `fit(verbose=False)` | Fit model and return treatment effect |
-| `estimate_se(n_bootstrap, seed, n_jobs)` | Estimate standard error via placebo bootstrap |
+| `estimate_se(n_bootstrap, seed, n_jobs)` | Estimate standard error via the placebo method; exact when there are at most `n_bootstrap` distinct placebo assignments |
 | `summary(confidence_level=0.95)` | Return formatted results with customizable CI |
 | `run_event_study(times)` | Estimate effects for multiple periods |
 | `plot_event_study(times, ...)` | Create event study plot with confidence intervals |
@@ -335,11 +338,14 @@ $$Y_{it} = \alpha_i + \gamma_t + \tau \cdot D_{it} + \varepsilon_{it}$$
 
 測試套件會重現 Arkhangelsky et al. (2021) 的加州 Proposition 99 基準結果，資料取自官方 R 套件 [`synthdid`](https://github.com/synth-inference/synthdid)：
 
-| | `sdid` | 論文 / R `synthdid` |
+| | `sdid` | R `synthdid` 0.0.9 |
 |---|---|---|
-| ATT（人均香菸包數） | -15.605 | -15.60 |
+| ATT（人均香菸包數） | -15.605 | -15.604 |
 | 最大的單位權重 | Nevada 0.124、New Hampshire 0.105、Connecticut 0.078 | 相同 |
 | 時間權重（1986 / 1987 / 1988） | 0.366 / 0.206 / 0.427 | 相同 |
+| Placebo 標準誤 | 9.37（精確值） | 列舉全部 38 個 placebo 時為 9.37 |
+
+**關於標準誤。** 論文報告的是 8.4，這是 `synthdid` 在 `set.seed(12345)`、預設隨機抽 200 次 placebo 時得到的值。換其他 seed 會落在約 8.0 到 10.6 之間，因為加州是唯一的處理單位，可抽的 placebo 只有 38 個。`sdid` 不抽樣，而是把 38 個全部算完，所以標準誤是精確值、與 seed 無關。它對上的是 `synthdid` 在同樣 38 個 placebo 上的結果，而不是論文那一次抽樣。
 
 0.5.0 之前的版本對單位權重的正則化不足，無法重現此基準（結果為 -12.19）；若你依賴估計結果，請升級。
 
@@ -438,7 +444,7 @@ TX    2020  108.7    1        1
 | 方法 | 說明 |
 |------|------|
 | `fit(verbose=False)` | 擬合模型並回傳處理效果 |
-| `estimate_se(n_bootstrap, seed, n_jobs)` | 透過安慰劑 bootstrap 估計標準誤 |
+| `estimate_se(n_bootstrap, seed, n_jobs)` | 以 placebo 法估計標準誤；placebo 組合數不超過 `n_bootstrap` 時為精確值 |
 | `summary(confidence_level=0.95)` | 回傳格式化結果，可自訂信賴區間 |
 | `run_event_study(times)` | 估計多個時間點的效果 |
 | `plot_event_study(times, ...)` | 繪製帶信賴區間的事件研究圖 |

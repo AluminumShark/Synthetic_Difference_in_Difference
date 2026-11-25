@@ -12,6 +12,8 @@ Reference:
 import logging
 import warnings
 from functools import partial
+from itertools import combinations
+from math import comb
 
 import cvxpy as cp
 import matplotlib.pyplot as plt
@@ -521,25 +523,47 @@ class SyntheticDiffInDiff:
         n_jobs: int = 1,
     ) -> float:
         """
-        Estimate standard error using a placebo bootstrap.
+        Estimate standard error using the placebo method.
 
         Following Arkhangelsky et al. (2021, Algorithm 4), the real treated
-        units are discarded and placebo treatments are assigned at random among
-        the control units. The spread of the resulting placebo effects
+        units are discarded and placebo treatments are assigned among the
+        control units. The spread of the resulting placebo effects
         approximates the sampling distribution of the estimator.
 
+        When the number of distinct placebo assignments does not exceed
+        ``n_bootstrap`` (for example, a single treated unit with a few dozen
+        controls), every assignment is evaluated once. The result is then
+        exact: it does not depend on ``seed`` and carries no Monte Carlo
+        error. Otherwise ``n_bootstrap`` assignments are drawn at random.
+
         Args:
-            n_bootstrap: Number of bootstrap iterations
-            seed: Random seed for reproducibility (None for nondeterministic)
+            n_bootstrap: Maximum number of placebo fits
+            seed: Random seed for reproducibility (None for nondeterministic);
+                only used when assignments are drawn at random
             n_jobs: Number of parallel jobs (-1 for all cores)
 
         Returns:
             Estimated standard error
         """
-        logger.info(f"Estimating standard error with {n_bootstrap} bootstrap samples...")
+        control_units = self.data[~self.data[self.treat_col]][self.units_col].unique()
 
-        # Local generator avoids mutating the caller's global NumPy RNG state.
-        rng = np.random.default_rng(seed)
+        if len(control_units) < 2:
+            raise ValueError("Need at least 2 control units for placebo inference.")
+
+        n_placebo = self._n_placebo_units(len(control_units))
+
+        if comb(len(control_units), n_placebo) <= n_bootstrap:
+            assignments = [list(units) for units in combinations(control_units, n_placebo)]
+            logger.info(
+                f"Estimating standard error from all {len(assignments)} placebo assignments..."
+            )
+        else:
+            # Local generator avoids mutating the caller's global NumPy RNG state.
+            rng = np.random.default_rng(seed)
+            assignments = [
+                rng.choice(control_units, size=n_placebo, replace=False) for _ in range(n_bootstrap)
+            ]
+            logger.info(f"Estimating standard error with {n_bootstrap} random placebos...")
 
         placebo_fn = partial(
             self._run_placebo,
@@ -550,10 +574,10 @@ class SyntheticDiffInDiff:
             post_col=self.post_col,
         )
 
-        # Placebo datasets are drawn in the parent process, so results are
+        # Placebo assignments are chosen in the parent process, so results are
         # deterministic given the seed regardless of n_jobs.
         effects = Parallel(n_jobs=n_jobs)(
-            delayed(placebo_fn)(self._create_placebo_data(rng)) for _ in range(n_bootstrap)
+            delayed(placebo_fn)(self._build_placebo_data(units)) for units in assignments
         )
 
         valid_effects = [e for e in effects if e is not None and not np.isnan(e)]
@@ -565,7 +589,8 @@ class SyntheticDiffInDiff:
                 stacklevel=2,
             )
 
-        self.standard_error = np.std(valid_effects, ddof=1) if valid_effects else np.nan
+        # Algorithm 4 divides by the number of placebo effects (ddof=0).
+        self.standard_error = float(np.std(valid_effects, ddof=0)) if valid_effects else np.nan
         logger.info(f"Standard error: {self.standard_error:.4f}")
 
         return self.standard_error
@@ -583,13 +608,18 @@ class SyntheticDiffInDiff:
         if len(control_units) < 2:
             raise ValueError("Need at least 2 control units for placebo inference.")
 
-        n_treated_units = self.data[self.data[self.treat_col]][self.units_col].nunique()
-
-        # At least one placebo-treated unit, leaving at least one as control.
-        n_placebo = max(1, min(n_treated_units, len(control_units) - 1))
+        n_placebo = self._n_placebo_units(len(control_units))
         placebo_units = rng.choice(control_units, size=n_placebo, replace=False)
 
-        # Keep only control units, then relabel the chosen ones as treated.
+        return self._build_placebo_data(placebo_units)
+
+    def _n_placebo_units(self, n_control_units: int) -> int:
+        """Number of placebo-treated units: as many as really treated, leaving one control."""
+        n_treated_units = self.data[self.data[self.treat_col]][self.units_col].nunique()
+        return max(1, min(n_treated_units, n_control_units - 1))
+
+    def _build_placebo_data(self, placebo_units) -> pd.DataFrame:
+        """Keep only the control units and relabel ``placebo_units`` as treated."""
         df = self.data[~self.data[self.treat_col]].copy()
         df[self.treat_col] = df[self.units_col].isin(placebo_units).astype(bool)
 
